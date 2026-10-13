@@ -3,6 +3,7 @@
 #include "tinydl/nn.h"
 
 #include <cstdint>
+#include <iosfwd>
 #include <vector>
 
 namespace tinydl {
@@ -24,6 +25,8 @@ public:
     void set_learning_rate(float learning_rate);
     float learning_rate() const noexcept { return options_.learning_rate; }
     std::uint64_t step_count() const noexcept { return step_; }
+    void save_state(std::ostream& stream) const;
+    void load_state(std::istream& stream);
 
 private:
     struct State {

@@ -76,8 +76,11 @@ For a small corpus, reduce `--vocab_size` (for example to 1000). Then train Tiny
 Training reserves the final 5% of tokens for validation, reports a rolling 100-step loss,
 and uses linear warmup followed by cosine learning-rate decay. Tune the schedule with
 `--learning-rate`, `--min-learning-rate`, and `--warmup-steps`; change validation frequency
-with `--validation-interval`. To test the optimizer and backward pass independently of corpus
-difficulty, deliberately overfit one fixed sequence:
+with `--validation-interval`. Every 5000 steps by default, training writes a numbered model
+checkpoint plus a `.state` sidecar containing AdamW moments, optimizer/global step counts, and
+the random sampler state. Change this with `--checkpoint-interval` (zero disables periodic
+checkpoints). To test the optimizer and backward pass independently of corpus difficulty,
+deliberately overfit one fixed sequence:
 
 ```bash
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
@@ -88,6 +91,24 @@ Model dimensions are configurable at training time and stored in the checkpoint.
 ```bash
 ./build/tinydl_train corpus.txt tokenizer.model model.tdl 20000 \
   --sequence-length 128 --channels 256 --heads 4 --layers 6 --ffn-channels 1024
+```
+
+Resume a new-format checkpoint for an additional number of steps. Model dimensions are read
+from the checkpoint, while the learning-rate schedule applies to this continuation run:
+
+```bash
+./build/tinydl_train corpus.txt tokenizer.model continued.tdl 10000 \
+  --resume model.tdl --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0
+```
+
+Old model-only checkpoints have no optimizer sidecar. They can still be continued once by
+providing their known completed step; AdamW starts fresh, and subsequent checkpoints contain
+the complete state:
+
+```bash
+./build/tinydl_train corpus.txt tokenizer.model continued.tdl 10000 \
+  --resume old-model.tdl --resume-step 20000 \
+  --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0
 ```
 
 Generate text from the checkpoint:
