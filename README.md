@@ -72,12 +72,19 @@ Generate text from the checkpoint:
 Use a shell in which DTK's HIP and hipBLAS CMake packages are visible:
 
 ```bash
+source /opt/dtk-26.04/env.sh
 cmake -S . -B build-dcu -DTINYDL_ENABLE_DCU=ON
 cmake --build build-dcu
 ./build-dcu/tinydl_demo --dcu
 ./build-dcu/tinydl_train corpus.txt tokenizer.model model.tdl 1000 --dcu
 ./build-dcu/tinydl_generate model.tdl tokenizer.model "你好" 100 --dcu
 ```
+
+TinyDL discovers the DTK root from `ROCM_PATH`, `HIP_PATH`, or `hipconfig`, selects DTK's
+underlying Clang compiler, and detects the active `gfx` architecture with `rocminfo`. On a
+login node without a visible DCU, specify the architecture explicitly, for example
+`-DCMAKE_HIP_ARCHITECTURES=gfx936`. Use `-DTINYDL_DTK_ROOT=/opt/dtk-26.04` only when the
+environment does not expose the installation location.
 
 If a particular DTK release exports a different hipBLAS CMake target name, change only the
 target name in `CMakeLists.txt`; the C++ backend interface does not change.
