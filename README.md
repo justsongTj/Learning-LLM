@@ -60,8 +60,12 @@ unseen characters remain representable instead of becoming unknown tokens:
 ```bash
 spm_train --input=data/corpus_zh.txt --model_prefix=tokenizer --model_type=bpe \
   --vocab_size=1000 --character_coverage=0.9995 --byte_fallback=true \
-  --hard_vocab_limit=false
+  --hard_vocab_limit=false --unk_id=0 --bos_id=1 --eos_id=2 --pad_id=-1
 ```
+
+BOS/EOS are required: training encodes each non-empty input line as an independent paragraph,
+adds its boundary tokens, and generation stops when EOS is produced. A tokenizer trained with
+`--eos_id=-1` must be retrained, and checkpoints made with the old token IDs are not compatible.
 
 For a small corpus, reduce `--vocab_size` (for example to 1000). Then train TinyDL:
 
@@ -79,18 +83,29 @@ difficulty, deliberately overfit one fixed sequence:
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
 ```
 
+Model dimensions are configurable at training time and stored in the checkpoint. For example:
+
+```bash
+./build/tinydl_train corpus.txt tokenizer.model model.tdl 20000 \
+  --sequence-length 128 --channels 256 --heads 4 --layers 6 --ffn-channels 1024
+```
+
 Generate text from the checkpoint:
 
 ```bash
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100
 ```
 
-Sampling defaults to temperature 0.8 and top-k 40. Greedy decoding is useful for inspecting
-the model's most likely continuation, while a fixed seed makes sampling reproducible:
+Sampling defaults to temperature 0.8, top-k 40, and a 1.1 repetition penalty over the most
+recent 64 tokens. Consecutive standalone whitespace tokens are suppressed. Greedy decoding is
+useful for inspecting the model's most likely continuation, while a fixed seed makes sampling
+reproducible:
 
 ```bash
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --temperature 0.1 --top-k 1
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --seed 42
+./build/tinydl_generate model.tdl tokenizer.model "你好" 100 \
+  --repetition-penalty 1.15 --repetition-window 64
 ```
 
 ## Build with DTK/DCU

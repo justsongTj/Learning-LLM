@@ -8,7 +8,6 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <iterator>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -16,10 +15,24 @@
 
 namespace {
 
-std::string read_text(const std::string& path) {
+std::vector<int> encode_corpus(const std::string& path,
+                               const tinydl::SentencePieceTokenizer& tokenizer) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) throw std::runtime_error("cannot open training text: " + path);
-    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+    if (tokenizer.eos_id() < 0)
+        throw std::runtime_error("SentencePiece model has no EOS token; retrain it with --eos_id=2");
+    std::vector<int> result;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        if (tokenizer.bos_id() >= 0) result.push_back(tokenizer.bos_id());
+        auto encoded = tokenizer.encode(line);
+        result.insert(result.end(), encoded.begin(), encoded.end());
+        result.push_back(tokenizer.eos_id());
+    }
+    if (!stream.eof()) throw std::runtime_error("failed while reading training text: " + path);
+    return result;
 }
 
 std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
@@ -28,7 +41,7 @@ std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
 
 float evaluate(tinydl::GptModel& model, const std::vector<int>& corpus,
                std::size_t begin, int sequence_length) {
-    constexpr int max_samples = 8;
+    constexpr int max_samples = 32;
     float total = 0.0f;
     int samples = 0;
     for (std::size_t start = begin;
@@ -50,7 +63,9 @@ int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "usage: tinydl_train <text-file> <tokenizer.model> <checkpoint> [steps] "
                      "[--learning-rate value] [--min-learning-rate value] [--warmup-steps value] "
-                     "[--validation-interval value] [--overfit-one-batch] [--dcu]\n";
+                     "[--validation-interval value] [--sequence-length value] [--channels value] "
+                     "[--heads value] [--layers value] [--ffn-channels value] "
+                     "[--overfit-one-batch] [--dcu]\n";
         return 2;
     }
     try {
@@ -62,6 +77,11 @@ int main(int argc, char** argv) {
         float min_learning_rate = 3.0e-5f;
         int warmup_steps = 100;
         int validation_interval = 500;
+        int sequence_length = 64;
+        int channels = 128;
+        int heads = 4;
+        int layers = 4;
+        int ffn_channels = 512;
         bool overfit_one_batch = false;
         bool use_dcu = false;
         for (int i = 4; i < argc; ++i) {
@@ -72,6 +92,11 @@ int main(int argc, char** argv) {
             else if (argument == "--min-learning-rate" && i + 1 < argc) min_learning_rate = std::stof(argv[++i]);
             else if (argument == "--warmup-steps" && i + 1 < argc) warmup_steps = std::stoi(argv[++i]);
             else if (argument == "--validation-interval" && i + 1 < argc) validation_interval = std::stoi(argv[++i]);
+            else if (argument == "--sequence-length" && i + 1 < argc) sequence_length = std::stoi(argv[++i]);
+            else if (argument == "--channels" && i + 1 < argc) channels = std::stoi(argv[++i]);
+            else if (argument == "--heads" && i + 1 < argc) heads = std::stoi(argv[++i]);
+            else if (argument == "--layers" && i + 1 < argc) layers = std::stoi(argv[++i]);
+            else if (argument == "--ffn-channels" && i + 1 < argc) ffn_channels = std::stoi(argv[++i]);
             else if (!argument.empty() && argument[0] != '-') steps = std::stoi(argument);
             else throw std::invalid_argument("unknown or incomplete option: " + argument);
         }
@@ -80,18 +105,21 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("learning rates must satisfy 0 < min <= initial");
         if (warmup_steps < 0 || validation_interval <= 0)
             throw std::invalid_argument("warmup must be non-negative and validation interval positive");
+        if (sequence_length <= 0 || channels <= 0 || heads <= 0 || layers <= 0 ||
+            ffn_channels <= 0 || channels % heads != 0)
+            throw std::invalid_argument("model dimensions must be positive and channels divisible by heads");
 
         tinydl::SentencePieceTokenizer tokenizer(tokenizer_path);
-        // 使用 SentencePiece 将文本编码成子词 token，中文字符不会被直接拆成裸字节。
-        const auto corpus = tokenizer.encode(read_text(text_path));
+        // Encode each paragraph independently and preserve its boundary with BOS/EOS.
+        const auto corpus = encode_corpus(text_path, tokenizer);
         //定义要训练的GPT模型结构
         tinydl::GptConfig config;
         config.vocab_size = tokenizer.vocabulary_size();
-        config.max_sequence_length = 64;
-        config.channels = 128;
-        config.num_heads = 4;
-        config.num_layers = 4;
-        config.ffn_channels = 512;
+        config.max_sequence_length = sequence_length;
+        config.channels = channels;
+        config.num_heads = heads;
+        config.num_layers = layers;
+        config.ffn_channels = ffn_channels;
         if (corpus.size() <= static_cast<std::size_t>(config.max_sequence_length))
             throw std::runtime_error("training text is shorter than one sequence");
 

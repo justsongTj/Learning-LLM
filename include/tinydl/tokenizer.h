@@ -27,6 +27,9 @@ public:
     std::vector<int> encode(const std::string& text) const;
     std::string decode(const std::vector<int>& token_ids) const;
     bool is_generatable(int token_id) const;
+    bool is_whitespace(int token_id) const;
+    int bos_id() const;
+    int eos_id() const;
 
 private:
     sentencepiece::SentencePieceProcessor processor_;

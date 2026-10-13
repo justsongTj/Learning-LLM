@@ -48,9 +48,18 @@ std::string SentencePieceTokenizer::decode(const std::vector<int>& token_ids) co
 }
 
 bool SentencePieceTokenizer::is_generatable(int token_id) const {
-    return token_id >= 0 && token_id < vocabulary_size() &&
+    return token_id == eos_id() ||
+           (token_id >= 0 && token_id < vocabulary_size() &&
            !processor_.IsControl(token_id) && !processor_.IsUnknown(token_id) &&
-           !processor_.IsUnused(token_id);
+           !processor_.IsUnused(token_id));
 }
+
+bool SentencePieceTokenizer::is_whitespace(int token_id) const {
+    return token_id >= 0 && token_id < vocabulary_size() &&
+           processor_.IdToPiece(token_id) == "▁";
+}
+
+int SentencePieceTokenizer::bos_id() const { return processor_.bos_id(); }
+int SentencePieceTokenizer::eos_id() const { return processor_.eos_id(); }
 
 }  // namespace tinydl
