@@ -19,8 +19,7 @@ if(NOT sentencepiece_FOUND)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
     set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(sentencepiece
-        URL https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        URL https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz)
     FetchContent_MakeAvailable(sentencepiece)
 endif()
 
