@@ -47,18 +47,21 @@ Run the demo:
 ./build/tinydl_demo
 ```
 
-First train a SentencePiece BPE model from the same UTF-8 corpus. Byte fallback ensures that
+First train a SentencePiece BPE model from the same UTF-8 corpus. The repository includes
+`data/corpus_zh.txt` as a small smoke-test corpus; use a much larger corpus for meaningful
+language quality. Byte fallback ensures that
 unseen characters remain representable instead of becoming unknown tokens:
 
 ```bash
-spm_train --input=corpus.txt --model_prefix=tokenizer --model_type=bpe \
-  --vocab_size=8000 --character_coverage=0.9995 --byte_fallback=true
+spm_train --input=data/corpus_zh.txt --model_prefix=tokenizer --model_type=bpe \
+  --vocab_size=1000 --character_coverage=0.9995 --byte_fallback=true \
+  --hard_vocab_limit=false
 ```
 
 For a small corpus, reduce `--vocab_size` (for example to 1000). Then train TinyDL:
 
 ```bash
-./build/tinydl_train corpus.txt tokenizer.model model.tdl 1000
+./build/tinydl_train data/corpus_zh.txt tokenizer.model model.tdl 1000
 ```
 
 Generate text from the checkpoint:
