@@ -11,9 +11,11 @@ AdamW::AdamW(std::vector<NamedParameter> parameters, AdamWOptions options)
     if (options_.learning_rate <= 0.0f) throw std::invalid_argument("learning rate must be positive");
     states_.reserve(parameters.size());
     for (auto& entry : parameters) {
-        const std::size_t count = entry.second->value().numel();
-        states_.push_back({entry.second, std::vector<float>(count, 0.0f),
-                           std::vector<float>(count, 0.0f)});
+        Tensor first(entry.second->value().shape(), entry.second->value().backend());
+        Tensor second(entry.second->value().shape(), entry.second->value().backend());
+        first.fill(0.0f);
+        second.fill(0.0f);
+        states_.push_back({entry.second, std::move(first), std::move(second)});
     }
 }
 
@@ -22,7 +24,8 @@ void AdamW::step() {
     double squared_norm = 0.0;
     for (const auto& state : states_) {
         if (const Tensor* grad = state.parameter->grad())
-            for (float value : grad->to_vector()) squared_norm += static_cast<double>(value) * value;
+            squared_norm += state.parameter->value().backend()->squared_l2_norm(
+                grad->data(), grad->numel());
     }
     const float norm = static_cast<float>(std::sqrt(squared_norm));
     const float clip = options_.max_grad_norm > 0.0f && norm > options_.max_grad_norm
@@ -33,20 +36,11 @@ void AdamW::step() {
     for (auto& state : states_) {
         const Tensor* grad_tensor = state.parameter->grad();
         if (!grad_tensor) continue;
-        auto values = state.parameter->value().to_vector();
-        const auto gradients = grad_tensor->to_vector();
-        for (std::size_t i = 0; i < values.size(); ++i) {
-            const float gradient = gradients[i] * clip;
-            state.first_moment[i] = options_.beta1 * state.first_moment[i] +
-                                    (1.0f - options_.beta1) * gradient;
-            state.second_moment[i] = options_.beta2 * state.second_moment[i] +
-                                     (1.0f - options_.beta2) * gradient * gradient;
-            const float first = state.first_moment[i] / correction1;
-            const float second = state.second_moment[i] / correction2;
-            values[i] -= options_.learning_rate *
-                (first / (std::sqrt(second) + options_.epsilon) + options_.weight_decay * values[i]);
-        }
-        state.parameter->value().copy_from(values);
+        Tensor& values = state.parameter->value();
+        values.backend()->adamw_update(
+            values.data(), grad_tensor->data(), state.first_moment.data(), state.second_moment.data(),
+            values.numel(), options_.beta1, options_.beta2, correction1, correction2,
+            options_.learning_rate, options_.epsilon, options_.weight_decay, clip);
     }
 }
 

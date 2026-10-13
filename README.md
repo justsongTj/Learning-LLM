@@ -23,15 +23,17 @@ backend uses the HIP runtime for memory and kernels and hipBLAS for matrix multi
 - differentiable Linear, Embedding, GELU, LayerNorm and causal multi-head attention;
 - pre-norm Transformer blocks and a decoder-only GPT model;
 - mean cross-entropy loss and AdamW with global gradient clipping;
+- device-resident gradient accumulation, matrix-multiplication backward, cross-entropy, and
+  AdamW updates on DCU;
 - SentencePiece subword tokenizer for efficient, valid UTF-8 Chinese and multilingual text;
 - binary model checkpoint save/load with configuration and shape validation;
 - training and autoregressive generation programs.
 
-The implementation is intentionally educational. Matrix multiplication uses hipBLAS on DCU,
-while several compound operators and their backward passes currently use host-readable loops
-through the common Tensor interface. This keeps every derivative visible in C++ and makes the
-CPU implementation a reference. Moving those loops into parallel HIP kernels is a later
-performance milestone and does not require changing the model classes.
+The implementation is intentionally educational. Matrix multiplication uses hipBLAS on DCU;
+its backward pass, gradient accumulation, cross-entropy, and AdamW updates stay on the device.
+Several remaining compound operators, including attention and parts of LayerNorm/embedding
+backward, still use host-readable loops through the common Tensor interface. The CPU
+implementation remains the correctness reference while those paths are moved to HIP kernels.
 
 ## Build the CPU backend
 

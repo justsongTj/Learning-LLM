@@ -28,8 +28,8 @@ public:
 private:
     struct State {
         Variable* parameter{};
-        std::vector<float> first_moment;
-        std::vector<float> second_moment;
+        Tensor first_moment;
+        Tensor second_moment;
     };
 
     std::vector<State> states_;

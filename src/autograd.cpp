@@ -62,13 +62,11 @@ void Variable::accumulate_grad(const Tensor& gradient) const {
     if (gradient.shape() != value().shape()) throw std::invalid_argument("gradient shape mismatch");
     if (!node_->gradient) {
         node_->gradient = std::make_unique<Tensor>(gradient.shape(), value().backend());
-        node_->gradient->copy_from(gradient.to_vector());
+        value().backend()->copy(node_->gradient->data(), gradient.data(), gradient.numel());
         return;
     }
-    auto accumulated = node_->gradient->to_vector();
-    const auto incoming = gradient.to_vector();
-    for (std::size_t i = 0; i < accumulated.size(); ++i) accumulated[i] += incoming[i];
-    node_->gradient->copy_from(accumulated);
+    value().backend()->add(node_->gradient->data(), gradient.data(),
+                           node_->gradient->data(), gradient.numel());
 }
 
 void Variable::zero_grad() {
@@ -132,27 +130,22 @@ Variable matmul(const Variable& a, const Variable& b) {
     Tensor output = tinydl::matmul(a.value(), b.value());
     const bool track = a.requires_grad() || b.requires_grad();
     return Variable::from_graph(std::move(output), track, {a, b}, [a, b](const Tensor& grad) {
-        const auto av = a.value().to_vector();
-        const auto bv = b.value().to_vector();
-        const auto gv = grad.to_vector();
         const std::size_t m = a.value().shape()[0];
         const std::size_t k = a.value().shape()[1];
         const std::size_t n = b.value().shape()[1];
         if (a.requires_grad()) {
-            std::vector<float> da(m * k, 0.0f);
-            for (std::size_t i = 0; i < m; ++i)
-                for (std::size_t p = 0; p < k; ++p)
-                    for (std::size_t j = 0; j < n; ++j)
-                        da[i * k + p] += gv[i * n + j] * bv[p * n + j];
-            a.accumulate_grad(tensor_from(a.value().shape(), a.value().backend(), da));
+            Tensor da(a.value().shape(), a.value().backend());
+            a.value().backend()->matmul_backward_left(
+                grad.data(), b.value().data(), da.data(),
+                static_cast<int>(m), static_cast<int>(n), static_cast<int>(k));
+            a.accumulate_grad(da);
         }
         if (b.requires_grad()) {
-            std::vector<float> db(k * n, 0.0f);
-            for (std::size_t p = 0; p < k; ++p)
-                for (std::size_t j = 0; j < n; ++j)
-                    for (std::size_t i = 0; i < m; ++i)
-                        db[p * n + j] += av[i * k + p] * gv[i * n + j];
-            b.accumulate_grad(tensor_from(b.value().shape(), b.value().backend(), db));
+            Tensor db(b.value().shape(), b.value().backend());
+            b.value().backend()->matmul_backward_right(
+                a.value().data(), grad.data(), db.data(),
+                static_cast<int>(m), static_cast<int>(n), static_cast<int>(k));
+            b.accumulate_grad(db);
         }
     });
 }
@@ -338,34 +331,27 @@ Variable cross_entropy(const Variable& logits, const std::vector<int>& targets) 
         throw std::invalid_argument("cross_entropy expects logits=[tokens,vocab] and one target per token");
     const std::size_t rows = logits.value().shape()[0];
     const std::size_t cols = logits.value().shape()[1];
-    const auto lv = logits.value().to_vector();
-    std::vector<float> probabilities(lv.size());
-    float loss = 0.0f;
+    std::vector<float> target_values(rows);
     for (std::size_t row = 0; row < rows; ++row) {
         if (targets[row] < 0 || static_cast<std::size_t>(targets[row]) >= cols)
             throw std::out_of_range("cross_entropy target is outside vocabulary");
-        const auto begin = lv.begin() + static_cast<std::ptrdiff_t>(row * cols);
-        const float maximum = *std::max_element(begin, begin + static_cast<std::ptrdiff_t>(cols));
-        float denominator = 0.0f;
-        for (std::size_t col = 0; col < cols; ++col) {
-            probabilities[row * cols + col] = std::exp(lv[row * cols + col] - maximum);
-            denominator += probabilities[row * cols + col];
-        }
-        for (std::size_t col = 0; col < cols; ++col) probabilities[row * cols + col] /= denominator;
-        loss -= std::log(std::max(probabilities[row * cols + static_cast<std::size_t>(targets[row])], 1.0e-30f));
+        target_values[row] = static_cast<float>(targets[row]);
     }
-    loss /= static_cast<float>(rows);
+    Tensor target_tensor({rows}, logits.value().backend());
+    target_tensor.copy_from(target_values);
+    Tensor probabilities(logits.value().shape(), logits.value().backend());
     Tensor output({1}, logits.value().backend());
-    output.copy_from({loss});
+    logits.value().backend()->cross_entropy_forward(
+        logits.value().data(), target_tensor.data(), probabilities.data(), output.data(),
+        static_cast<int>(rows), static_cast<int>(cols));
     return Variable::from_graph(std::move(output), logits.requires_grad(), {logits},
-        [logits, targets, probabilities, rows, cols](const Tensor& grad) {
+        [logits, target_tensor, probabilities, rows, cols](const Tensor& grad) {
             if (!logits.requires_grad()) return;
-            std::vector<float> dx = probabilities;
-            for (std::size_t row = 0; row < rows; ++row)
-                dx[row * cols + static_cast<std::size_t>(targets[row])] -= 1.0f;
-            const float upstream = grad.to_vector()[0] / static_cast<float>(rows);
-            for (float& value : dx) value *= upstream;
-            logits.accumulate_grad(tensor_from(logits.value().shape(), logits.value().backend(), dx));
+            Tensor dx(logits.value().shape(), logits.value().backend());
+            logits.value().backend()->cross_entropy_backward(
+                probabilities.data(), target_tensor.data(), grad.data(), dx.data(),
+                static_cast<int>(rows), static_cast<int>(cols));
+            logits.accumulate_grad(dx);
         });
 }
 
