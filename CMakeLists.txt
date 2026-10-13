@@ -19,7 +19,9 @@ if(NOT sentencepiece_FOUND)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
     set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(sentencepiece
-        URL https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz)
+        GIT_REPOSITORY https://github.com/google/sentencepiece.git
+        GIT_TAG v0.2.0
+        GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(sentencepiece)
 endif()
 
