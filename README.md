@@ -76,7 +76,9 @@ For a small corpus, reduce `--vocab_size` (for example to 1000). Then train Tiny
 Training reserves the final 5% of tokens for validation, reports a rolling 100-step loss,
 and uses linear warmup followed by cosine learning-rate decay. Tune the schedule with
 `--learning-rate`, `--min-learning-rate`, and `--warmup-steps`; change validation frequency
-with `--validation-interval`. Every 5000 steps by default, training writes a numbered model
+with `--validation-interval`. For comparisons across changing training corpora, pass a fixed
+UTF-8 validation file with `--validation-text validation.txt`; the complete positional input
+file is then used for training. Every 5000 steps by default, training writes a numbered model
 checkpoint plus a `.state` sidecar containing AdamW moments, optimizer/global step counts, and
 the random sampler state. Change this with `--checkpoint-interval` (zero disables periodic
 checkpoints). To test the optimizer and backward pass independently of corpus difficulty,
@@ -126,7 +128,49 @@ reproducible:
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --temperature 0.1 --top-k 1
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --seed 42
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100 \
-  --repetition-penalty 1.15 --repetition-window 64
+  --repetition-penalty 1.15 --repetition-window 64 --min-new-tokens 20
+```
+
+`--min-new-tokens` temporarily excludes EOS from sampling. It controls premature endings but
+does not improve model knowledge, so keep it well below the maximum generated-token count.
+
+## Prepare a larger corpus
+
+`scripts/prepare_hf_corpus.py` streams a configurable Hugging Face dataset, normalizes Unicode,
+filters very short/non-Chinese lines, removes exact duplicates, and makes a deterministic
+train/validation split. Streaming avoids downloading the entire source dataset first. Install
+the optional data dependency and build a 200 MiB mixture of the existing corpus and Chinese
+Wikipedia:
+
+```bash
+python3 -m pip install --user datasets
+
+python3 scripts/prepare_hf_corpus.py \
+  --local-text "$HOME/tujie/apps/datasets/corpus_wikipedia_zh_15mb.txt" \
+  --dataset wikimedia/wikipedia \
+  --config 20231101.zh \
+  --split train \
+  --text-column text \
+  --max-output-mb 200 \
+  --train-output "$HOME/tujie/apps/datasets/corpus_zh_200mb_train.txt" \
+  --validation-output "$HOME/tujie/apps/datasets/corpus_zh_fixed_validation.txt"
+```
+
+The dataset, configuration, split, and text column are command-line parameters because Hub
+datasets can use different schemas. Inspect the dataset card before changing them. Keep the
+generated validation file unchanged across experiments, and continue an existing model with
+the same tokenizer:
+
+```bash
+./build/tinydl_train \
+  "$HOME/tujie/apps/datasets/corpus_zh_200mb_train.txt" \
+  "$HOME/tujie/apps/tinydl-artifacts/tokenizer_zh_8k_eos.model" \
+  "$HOME/tujie/apps/tinydl-artifacts/model-zh-expanded.tdl" \
+  20000 \
+  --validation-text "$HOME/tujie/apps/datasets/corpus_zh_fixed_validation.txt" \
+  --resume "$HOME/tujie/apps/tinydl-artifacts/model-wiki-zh-8k-eos-30k.tdl" \
+  --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0 \
+  --validation-interval 500 --checkpoint-interval 2500 --dcu
 ```
 
 ## Build with DTK/DCU
@@ -175,6 +219,6 @@ target name in `CMakeLists.txt`; the C++ backend interface does not change.
 - sequences are processed one at a time; batching is not implemented yet;
 - attention is the readable quadratic implementation and has no KV cache;
 - only contiguous FP32 tensors are supported;
-- AdamW moment state is not included in model checkpoints;
+- AdamW moment state lives in the `.tdl.state` sidecar rather than the model file;
 - the SentencePiece model is stored separately and must accompany the model checkpoint;
 - no distributed or mixed-precision training is included.

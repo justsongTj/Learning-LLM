@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
                      "[--validation-interval value] [--sequence-length value] [--channels value] "
                      "[--heads value] [--layers value] [--ffn-channels value] "
                      "[--resume checkpoint] [--resume-step value] [--checkpoint-interval value] "
+                     "[--validation-text path] "
                      "[--overfit-one-batch] [--dcu]\n";
         return 2;
     }
@@ -140,6 +141,7 @@ int main(int argc, char** argv) {
         int ffn_channels = 512;
         int checkpoint_interval = 5000;
         std::string resume_path;
+        std::string validation_path;
         std::int64_t resume_step = -1;
         bool overfit_one_batch = false;
         bool use_dcu = false;
@@ -159,6 +161,7 @@ int main(int argc, char** argv) {
             else if (argument == "--resume" && i + 1 < argc) resume_path = argv[++i];
             else if (argument == "--resume-step" && i + 1 < argc) resume_step = std::stoll(argv[++i]);
             else if (argument == "--checkpoint-interval" && i + 1 < argc) checkpoint_interval = std::stoi(argv[++i]);
+            else if (argument == "--validation-text" && i + 1 < argc) validation_path = argv[++i];
             else if (!argument.empty() && argument[0] != '-') steps = std::stoi(argument);
             else throw std::invalid_argument("unknown or incomplete option: " + argument);
         }
@@ -175,6 +178,8 @@ int main(int argc, char** argv) {
         tinydl::SentencePieceTokenizer tokenizer(tokenizer_path);
         // Encode each paragraph independently and preserve its boundary with BOS/EOS.
         const auto corpus = encode_corpus(text_path, tokenizer);
+        const auto external_validation = validation_path.empty()
+            ? std::vector<int>{} : encode_corpus(validation_path, tokenizer);
         //定义要训练的GPT模型结构
         tinydl::GptConfig config;
         config.vocab_size = tokenizer.vocabulary_size();
@@ -195,9 +200,14 @@ int main(int argc, char** argv) {
         std::mt19937 random(42);//随机数生成器，用来随机选择训练语料片段的位置
         const std::size_t minimum_split = static_cast<std::size_t>(config.max_sequence_length + 1);
         const std::size_t validation_size = std::max(minimum_split, corpus.size() / 20);
-        if (!overfit_one_batch && corpus.size() <= validation_size + minimum_split)
+        if (!overfit_one_batch && validation_path.empty() &&
+            corpus.size() <= validation_size + minimum_split)
             throw std::runtime_error("training text is too short for a training/validation split");
-        const std::size_t training_end = overfit_one_batch ? corpus.size() : corpus.size() - validation_size;
+        if (!overfit_one_batch && !validation_path.empty() &&
+            external_validation.size() <= minimum_split)
+            throw std::runtime_error("validation text is shorter than one sequence");
+        const std::size_t training_end = overfit_one_batch || !validation_path.empty()
+            ? corpus.size() : corpus.size() - validation_size;
         std::uniform_int_distribution<std::size_t> start_distribution(
             0, training_end - static_cast<std::size_t>(config.max_sequence_length) - 1);//定义随机起点范围 从tokenizer编码后的语料中随机选择一个起点，截取长度为max_sequence_length的片段作为训练样本
 
@@ -275,7 +285,9 @@ int main(int argc, char** argv) {
                           << " lr " << current_learning_rate << '\n';
             }
             if (!overfit_one_batch && (step % validation_interval == 0 || step == steps)) {
-                const float validation_loss = evaluate(model, corpus, training_end,
+                const auto& validation_corpus = validation_path.empty() ? corpus : external_validation;
+                const std::size_t validation_begin = validation_path.empty() ? training_end : 0;
+                const float validation_loss = evaluate(model, validation_corpus, validation_begin,
                                                        config.max_sequence_length);
                 std::cout << "step " << global_step << " validation_loss " << validation_loss
                           << " perplexity " << std::exp(validation_loss) << '\n';

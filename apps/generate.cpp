@@ -16,6 +16,7 @@ int sample_last_token(const tinydl::Tensor& logits,
                       const tinydl::SentencePieceTokenizer& tokenizer,
                       const std::vector<int>& history, float temperature, int top_k,
                       float repetition_penalty, int repetition_window,
+                      bool allow_eos,
                       std::mt19937& random) {
     const auto values = logits.to_vector();
     const std::size_t vocab = logits.shape()[1];
@@ -36,6 +37,7 @@ int sample_last_token(const tinydl::Tensor& logits,
     indices.reserve(vocab);
     for (std::size_t i = 0; i < vocab; ++i) {
         const int token = static_cast<int>(i);
+        if (!allow_eos && token == tokenizer.eos_id()) continue;
         const bool repeated_whitespace = !history.empty() &&
             tokenizer.is_whitespace(history.back()) && tokenizer.is_whitespace(token);
         if (tokenizer.is_generatable(token) && !repeated_whitespace) indices.push_back(token);
@@ -61,7 +63,8 @@ int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "usage: tinydl_generate <checkpoint> <tokenizer.model> <prompt> [tokens] "
                      "[--temperature value] [--top-k value] [--repetition-penalty value] "
-                     "[--repetition-window value] [--seed value] [--dcu]\n";
+                     "[--repetition-window value] [--min-new-tokens value] "
+                     "[--seed value] [--dcu]\n";
         return 2;
     }
     try {
@@ -73,6 +76,7 @@ int main(int argc, char** argv) {
         int top_k = 40;
         float repetition_penalty = 1.1f;
         int repetition_window = 64;
+        int min_new_tokens = 0;
         unsigned int seed = std::random_device{}();
         bool use_dcu = false;
         for (int i = 4; i < argc; ++i) {
@@ -82,11 +86,14 @@ int main(int argc, char** argv) {
             else if (argument == "--top-k" && i + 1 < argc) top_k = std::stoi(argv[++i]);
             else if (argument == "--repetition-penalty" && i + 1 < argc) repetition_penalty = std::stof(argv[++i]);
             else if (argument == "--repetition-window" && i + 1 < argc) repetition_window = std::stoi(argv[++i]);
+            else if (argument == "--min-new-tokens" && i + 1 < argc) min_new_tokens = std::stoi(argv[++i]);
             else if (argument == "--seed" && i + 1 < argc) seed = static_cast<unsigned int>(std::stoul(argv[++i]));
             else if (!argument.empty() && argument[0] != '-') tokens_to_generate = std::stoi(argument);
             else throw std::invalid_argument("unknown or incomplete option: " + argument);
         }
         if (tokens_to_generate < 0) throw std::invalid_argument("tokens must not be negative");
+        if (min_new_tokens < 0 || min_new_tokens > tokens_to_generate)
+            throw std::invalid_argument("min-new-tokens must be between zero and tokens");
         if (temperature <= 0.0f) throw std::invalid_argument("temperature must be positive");
         if (top_k <= 0) throw std::invalid_argument("top-k must be positive");
         if (repetition_penalty < 1.0f || repetition_window <= 0)
@@ -108,7 +115,8 @@ int main(int argc, char** argv) {
             std::vector<int> context(tokens.end() - static_cast<std::ptrdiff_t>(context_size), tokens.end());
             const int next = sample_last_token(model.forward(context).value(), tokenizer,
                                                tokens, temperature, top_k,
-                                               repetition_penalty, repetition_window, random);
+                                               repetition_penalty, repetition_window,
+                                               step >= min_new_tokens, random);
             tokens.push_back(next);
             if (next == tokenizer.eos_id()) break;
         }
