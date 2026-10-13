@@ -12,12 +12,12 @@ namespace tinydl {
 using NamedParameter = std::pair<std::string, Variable*>;
 
 struct GptConfig {
-    int vocab_size{256};
-    int max_sequence_length{128};
-    int channels{128};
-    int num_heads{4};
-    int num_layers{4};
-    int ffn_channels{512};
+    int vocab_size{256};                 //模型认识的token数量
+    int max_sequence_length{128};        //模型能处理的最大序列长度
+    int channels{128};                   //每个token用多宽的向量表示  经过embedding层后每个token的向量维度
+    int num_heads{4};                    //注意力分成多少组
+    int num_layers{4};                   // 重复多少层transform
+    int ffn_channels{512};               //每层内部思考空间多宽
 };
 
 class Linear {

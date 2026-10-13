@@ -23,7 +23,7 @@ backend uses the HIP runtime for memory and kernels and hipBLAS for matrix multi
 - differentiable Linear, Embedding, GELU, LayerNorm and causal multi-head attention;
 - pre-norm Transformer blocks and a decoder-only GPT model;
 - mean cross-entropy loss and AdamW with global gradient clipping;
-- reversible byte-level tokenizer for arbitrary UTF-8 input;
+- SentencePiece subword tokenizer for efficient, valid UTF-8 Chinese and multilingual text;
 - binary model checkpoint save/load with configuration and shape validation;
 - training and autoregressive generation programs.
 
@@ -47,16 +47,24 @@ Run the demo:
 ./build/tinydl_demo
 ```
 
-Train a byte-level language model from a UTF-8 text file:
+First train a SentencePiece BPE model from the same UTF-8 corpus. Byte fallback ensures that
+unseen characters remain representable instead of becoming unknown tokens:
 
 ```bash
-./build/tinydl_train corpus.txt model.tdl 1000
+spm_train --input=corpus.txt --model_prefix=tokenizer --model_type=bpe \
+  --vocab_size=8000 --character_coverage=0.9995 --byte_fallback=true
+```
+
+For a small corpus, reduce `--vocab_size` (for example to 1000). Then train TinyDL:
+
+```bash
+./build/tinydl_train corpus.txt tokenizer.model model.tdl 1000
 ```
 
 Generate text from the checkpoint:
 
 ```bash
-./build/tinydl_generate model.tdl "TinyDL" 100
+./build/tinydl_generate model.tdl tokenizer.model "你好" 100
 ```
 
 ## Build with DTK/DCU
@@ -67,8 +75,8 @@ Use a shell in which DTK's HIP and hipBLAS CMake packages are visible:
 cmake -S . -B build-dcu -DTINYDL_ENABLE_DCU=ON
 cmake --build build-dcu
 ./build-dcu/tinydl_demo --dcu
-./build-dcu/tinydl_train corpus.txt model.tdl 1000 --dcu
-./build-dcu/tinydl_generate model.tdl "TinyDL" 100 --dcu
+./build-dcu/tinydl_train corpus.txt tokenizer.model model.tdl 1000 --dcu
+./build-dcu/tinydl_generate model.tdl tokenizer.model "你好" 100 --dcu
 ```
 
 If a particular DTK release exports a different hipBLAS CMake target name, change only the
@@ -98,5 +106,5 @@ target name in `CMakeLists.txt`; the C++ backend interface does not change.
 - attention is the readable quadratic implementation and has no KV cache;
 - only contiguous FP32 tensors are supported;
 - AdamW moment state is not included in model checkpoints;
-- the tokenizer is byte-level rather than BPE;
+- the SentencePiece model is stored separately and must accompany the model checkpoint;
 - no distributed or mixed-precision training is included.

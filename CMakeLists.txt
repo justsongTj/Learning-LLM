@@ -3,10 +3,36 @@ project(TinyDL LANGUAGES CXX)
 
 option(TINYDL_ENABLE_DCU "Build the DTK/HIP DCU backend" OFF)
 option(TINYDL_BUILD_TESTS "Build TinyDL tests" ON)
+option(TINYDL_FETCH_SENTENCEPIECE "Download SentencePiece when it is not installed" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(sentencepiece CONFIG QUIET)
+if(NOT sentencepiece_FOUND)
+    if(NOT TINYDL_FETCH_SENTENCEPIECE)
+        message(FATAL_ERROR "SentencePiece was not found; install it or enable TINYDL_FETCH_SENTENCEPIECE")
+    endif()
+    include(FetchContent)
+    # SentencePiece 0.2.0 predates CMake 4's removal of compatibility below 3.5.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(sentencepiece
+        URL https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(sentencepiece)
+endif()
+
+if(TARGET sentencepiece::sentencepiece)
+    set(TINYDL_SENTENCEPIECE_TARGET sentencepiece::sentencepiece)
+elseif(TARGET sentencepiece-static)
+    set(TINYDL_SENTENCEPIECE_TARGET sentencepiece-static)
+elseif(TARGET sentencepiece)
+    set(TINYDL_SENTENCEPIECE_TARGET sentencepiece)
+else()
+    message(FATAL_ERROR "No usable SentencePiece CMake target was found")
+endif()
 
 add_library(tinydl
     src/tensor.cpp
@@ -19,6 +45,13 @@ add_library(tinydl
     src/cpu/cpu_backend.cpp
 )
 target_include_directories(tinydl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(DEFINED sentencepiece_SOURCE_DIR)
+    target_include_directories(tinydl PUBLIC ${sentencepiece_SOURCE_DIR}/src)
+endif()
+target_link_libraries(tinydl PUBLIC ${TINYDL_SENTENCEPIECE_TARGET})
+if(MSVC)
+    target_compile_options(tinydl PUBLIC /utf-8)
+endif()
 
 if(TINYDL_ENABLE_DCU)
     include(CheckLanguage)
