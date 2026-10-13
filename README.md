@@ -41,6 +41,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+SentencePiece 0.2.0 is vendored under `extern/sentencepiece`, so configuration and builds do
+not download dependencies. Its Apache-2.0 license is preserved in that directory.
+
 Run the demo:
 
 ```bash
@@ -76,18 +79,19 @@ Use a shell in which DTK's HIP and hipBLAS CMake packages are visible:
 
 ```bash
 source /opt/dtk-26.04/env.sh
-cmake -S . -B build-dcu -DTINYDL_ENABLE_DCU=ON
+cmake -S . -B build-dcu
 cmake --build build-dcu
 ./build-dcu/tinydl_demo --dcu
 ./build-dcu/tinydl_train corpus.txt tokenizer.model model.tdl 1000 --dcu
 ./build-dcu/tinydl_generate model.tdl tokenizer.model "你好" 100 --dcu
 ```
 
-TinyDL requires `ROCM_PATH` from the loaded DTK environment. It uses that root to select
+When `ROCM_PATH` is present, TinyDL enables both CPU and DCU backends by default. It uses
+that root to select
 DTK's underlying Clang compiler and find HIP packages, then detects the active `gfx`
-architecture with `rocminfo`. Configuration stops with a clear error when `ROCM_PATH` is
-unset or invalid. On a login node without a visible DCU, specify the architecture explicitly,
-for example `-DCMAKE_HIP_ARCHITECTURES=gfx936`.
+architecture with `rocminfo`. If DCU is explicitly enabled while `ROCM_PATH` is unset or
+invalid, configuration stops with a clear error. On a login node without a visible DCU,
+specify the architecture explicitly, for example `-DCMAKE_HIP_ARCHITECTURES=gfx936`.
 
 If a particular DTK release exports a different hipBLAS CMake target name, change only the
 target name in `CMakeLists.txt`; the C++ backend interface does not change.

@@ -1,28 +1,24 @@
 cmake_minimum_required(VERSION 3.20)
 project(TinyDL LANGUAGES CXX)
 
-option(TINYDL_ENABLE_DCU "Build the DTK/HIP DCU backend" OFF)
+set(TINYDL_DCU_DEFAULT OFF)
+if(DEFINED ENV{ROCM_PATH} AND NOT "$ENV{ROCM_PATH}" STREQUAL "")
+    set(TINYDL_DCU_DEFAULT ON)
+endif()
+option(TINYDL_ENABLE_DCU "Build the DTK/HIP DCU backend" ${TINYDL_DCU_DEFAULT})
 option(TINYDL_BUILD_TESTS "Build TinyDL tests" ON)
-option(TINYDL_FETCH_SENTENCEPIECE "Download SentencePiece when it is not installed" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(sentencepiece CONFIG QUIET)
-if(NOT sentencepiece_FOUND)
-    if(NOT TINYDL_FETCH_SENTENCEPIECE)
-        message(FATAL_ERROR "SentencePiece was not found; install it or enable TINYDL_FETCH_SENTENCEPIECE")
-    endif()
-    include(FetchContent)
-    # SentencePiece 0.2.0 predates CMake 4's removal of compatibility below 3.5.
+set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/sentencepiece/CMakeLists.txt")
+    # Vendored for reproducible builds on compute nodes without Internet access.
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-    set(SPM_BUILD_TEST OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(sentencepiece
-        GIT_REPOSITORY https://github.com/google/sentencepiece.git
-        GIT_TAG v0.2.0
-        GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(sentencepiece)
+    add_subdirectory(extern/sentencepiece)
+else()
+    find_package(sentencepiece CONFIG REQUIRED)
 endif()
 
 if(TARGET sentencepiece::sentencepiece)
@@ -46,8 +42,9 @@ add_library(tinydl
     src/cpu/cpu_backend.cpp
 )
 target_include_directories(tinydl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-if(DEFINED sentencepiece_SOURCE_DIR)
-    target_include_directories(tinydl PUBLIC ${sentencepiece_SOURCE_DIR}/src)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/sentencepiece/src")
+    target_include_directories(tinydl PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/extern/sentencepiece/src)
 endif()
 target_link_libraries(tinydl PUBLIC ${TINYDL_SENTENCEPIECE_TARGET})
 if(MSVC)
