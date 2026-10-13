@@ -4,7 +4,6 @@ project(TinyDL LANGUAGES CXX)
 option(TINYDL_ENABLE_DCU "Build the DTK/HIP DCU backend" OFF)
 option(TINYDL_BUILD_TESTS "Build TinyDL tests" ON)
 option(TINYDL_FETCH_SENTENCEPIECE "Download SentencePiece when it is not installed" ON)
-set(TINYDL_DTK_ROOT "" CACHE PATH "DTK/ROCm installation root")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,34 +53,30 @@ if(MSVC)
 endif()
 
 if(TINYDL_ENABLE_DCU)
-    if(NOT TINYDL_DTK_ROOT)
-        if(DEFINED ENV{ROCM_PATH} AND NOT "$ENV{ROCM_PATH}" STREQUAL "")
-            set(TINYDL_DTK_ROOT "$ENV{ROCM_PATH}")
-        elseif(DEFINED ENV{HIP_PATH} AND NOT "$ENV{HIP_PATH}" STREQUAL "")
-            get_filename_component(TINYDL_DTK_ROOT "$ENV{HIP_PATH}" DIRECTORY)
-        else()
-            find_program(TINYDL_HIPCONFIG hipconfig)
-            if(TINYDL_HIPCONFIG)
-                execute_process(
-                    COMMAND ${TINYDL_HIPCONFIG} --rocmpath
-                    OUTPUT_VARIABLE TINYDL_DTK_ROOT
-                    OUTPUT_STRIP_TRAILING_WHITESPACE
-                    ERROR_QUIET)
-            endif()
-        endif()
+    if(NOT DEFINED ENV{ROCM_PATH} OR "$ENV{ROCM_PATH}" STREQUAL "")
+        message(FATAL_ERROR
+            "ROCM_PATH is not set. Load the DTK environment before configuring TinyDL.")
+    endif()
+    set(TINYDL_DTK_ROOT "$ENV{ROCM_PATH}")
+
+    if(NOT IS_DIRECTORY "${TINYDL_DTK_ROOT}")
+        message(FATAL_ERROR
+            "ROCM_PATH does not point to a directory: ${TINYDL_DTK_ROOT}. Load the DTK environment again.")
+    endif()
+    if(NOT EXISTS "${TINYDL_DTK_ROOT}/llvm/bin/clang++")
+        message(FATAL_ERROR
+            "ROCM_PATH does not contain llvm/bin/clang++: ${TINYDL_DTK_ROOT}")
     endif()
 
-    if(TINYDL_DTK_ROOT)
-        message(STATUS "TinyDL DTK root: ${TINYDL_DTK_ROOT}")
-        list(PREPEND CMAKE_PREFIX_PATH "${TINYDL_DTK_ROOT}" "${TINYDL_DTK_ROOT}/hip")
-        if(NOT CMAKE_HIP_COMPILER AND EXISTS "${TINYDL_DTK_ROOT}/llvm/bin/clang++")
-            set(CMAKE_HIP_COMPILER "${TINYDL_DTK_ROOT}/llvm/bin/clang++"
-                CACHE FILEPATH "HIP compiler" FORCE)
-        endif()
-        if(NOT CMAKE_HIP_COMPILER_ROCM_ROOT)
-            set(CMAKE_HIP_COMPILER_ROCM_ROOT "${TINYDL_DTK_ROOT}"
-                CACHE PATH "HIP compiler ROCm root" FORCE)
-        endif()
+    message(STATUS "TinyDL DTK root from ROCM_PATH: ${TINYDL_DTK_ROOT}")
+    list(PREPEND CMAKE_PREFIX_PATH "${TINYDL_DTK_ROOT}" "${TINYDL_DTK_ROOT}/hip")
+    if(NOT CMAKE_HIP_COMPILER)
+        set(CMAKE_HIP_COMPILER "${TINYDL_DTK_ROOT}/llvm/bin/clang++"
+            CACHE FILEPATH "HIP compiler" FORCE)
+    endif()
+    if(NOT CMAKE_HIP_COMPILER_ROCM_ROOT)
+        set(CMAKE_HIP_COMPILER_ROCM_ROOT "${TINYDL_DTK_ROOT}"
+            CACHE PATH "HIP compiler ROCm root" FORCE)
     endif()
 
     if(NOT CMAKE_HIP_ARCHITECTURES)

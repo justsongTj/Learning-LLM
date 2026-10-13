@@ -80,11 +80,11 @@ cmake --build build-dcu
 ./build-dcu/tinydl_generate model.tdl tokenizer.model "你好" 100 --dcu
 ```
 
-TinyDL discovers the DTK root from `ROCM_PATH`, `HIP_PATH`, or `hipconfig`, selects DTK's
-underlying Clang compiler, and detects the active `gfx` architecture with `rocminfo`. On a
-login node without a visible DCU, specify the architecture explicitly, for example
-`-DCMAKE_HIP_ARCHITECTURES=gfx936`. Use `-DTINYDL_DTK_ROOT=/opt/dtk-26.04` only when the
-environment does not expose the installation location.
+TinyDL requires `ROCM_PATH` from the loaded DTK environment. It uses that root to select
+DTK's underlying Clang compiler and find HIP packages, then detects the active `gfx`
+architecture with `rocminfo`. Configuration stops with a clear error when `ROCM_PATH` is
+unset or invalid. On a login node without a visible DCU, specify the architecture explicitly,
+for example `-DCMAKE_HIP_ARCHITECTURES=gfx936`.
 
 If a particular DTK release exports a different hipBLAS CMake target name, change only the
 target name in `CMakeLists.txt`; the C++ backend interface does not change.
