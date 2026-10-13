@@ -161,6 +161,24 @@ datasets can use different schemas. Inspect the dataset card before changing the
 generated validation file unchanged across experiments, and continue an existing model with
 the same tokenizer:
 
+For servers that can reach ModelScope but not Hugging Face, the same cleaner can stream a
+ModelScope dataset. Multiple fields can be joined into one training paragraph:
+
+```bash
+python3 -m pip install --user modelscope addict
+python3 scripts/prepare_hf_corpus.py \
+  --local-text "$HOME/tujie/apps/datasets/corpus_wikipedia_zh_15mb.txt" \
+  --modelscope-dataset AI-ModelScope/train_1M_CN \
+  --split train \
+  --text-columns instruction,input,output \
+  --max-output-mb 200 \
+  --train-output "$HOME/tujie/apps/datasets/corpus_zh_200mb_train.txt" \
+  --validation-output "$HOME/tujie/apps/datasets/corpus_zh_fixed_validation.txt"
+```
+
+Outputs are first written as `.part` files and renamed only after successful completion, so a
+network failure cannot leave an incomplete file under the requested final name.
+
 ```bash
 ./build/tinydl_train \
   "$HOME/tujie/apps/datasets/corpus_zh_200mb_train.txt" \

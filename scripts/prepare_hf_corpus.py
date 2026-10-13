@@ -35,9 +35,13 @@ def stable_bucket(text: str, seed: int) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", help="Hugging Face dataset repository name")
+    parser.add_argument("--modelscope-dataset", help="ModelScope dataset repository name")
     parser.add_argument("--config", help="optional dataset configuration name")
+    parser.add_argument("--modelscope-subset", help="optional ModelScope subset name")
     parser.add_argument("--split", default="train")
     parser.add_argument("--text-column", default="text")
+    parser.add_argument("--text-columns",
+                        help="comma-separated fields to join, for example instruction,input,output")
     parser.add_argument("--local-text", action="append", default=[],
                         help="local UTF-8 text file to mix in; may be repeated")
     parser.add_argument("--train-output", required=True)
@@ -51,14 +55,28 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    if not args.dataset and not args.local_text:
-        parser.error("provide --dataset, --local-text, or both")
+    if args.dataset and args.modelscope_dataset:
+        parser.error("choose only one of --dataset and --modelscope-dataset")
+    if not args.dataset and not args.modelscope_dataset and not args.local_text:
+        parser.error("provide --dataset, --modelscope-dataset, --local-text, or a mixture")
     if args.max_output_mb <= 0 or not 0.0 < args.validation_ratio < 1.0:
         parser.error("max-output-mb must be positive and validation-ratio must be between 0 and 1")
     if args.min_chars <= 0 or args.max_chars < args.min_chars:
         parser.error("invalid paragraph length limits")
     if not 0.0 <= args.min_cjk_ratio <= 1.0:
         parser.error("min-cjk-ratio must be between 0 and 1")
+
+    text_columns = ([field.strip() for field in args.text_columns.split(",") if field.strip()]
+                    if args.text_columns else [args.text_column])
+
+    def row_text(row):
+        missing = [field for field in text_columns if field not in row]
+        if missing:
+            raise RuntimeError(
+                f"dataset row has no {missing!r} column(s); available: {sorted(row)}")
+        values = [row[field].strip() for field in text_columns
+                  if isinstance(row[field], str) and row[field].strip()]
+        return " ".join(values)
 
     def source_texts():
         for filename in args.local_text:
@@ -75,44 +93,66 @@ def main() -> int:
                 positional.append(args.config)
             dataset = load_dataset(*positional, split=args.split, streaming=True)
             for row in dataset:
-                if args.text_column not in row:
-                    raise RuntimeError(
-                        f"dataset row has no {args.text_column!r} column; available: {sorted(row)}")
-                yield row[args.text_column]
+                yield row_text(row)
+        if args.modelscope_dataset:
+            try:
+                from modelscope.msdatasets import MsDataset
+            except ImportError as error:
+                raise RuntimeError(
+                    "ModelScope support requires: python3 -m pip install modelscope addict") from error
+            options = {
+                "split": args.split,
+                "use_streaming": True,
+            }
+            if args.modelscope_subset:
+                options["subset_name"] = args.modelscope_subset
+            dataset = MsDataset.load(args.modelscope_dataset, **options)
+            for row in dataset:
+                yield row_text(row)
 
     train_path = Path(args.train_output)
     validation_path = Path(args.validation_output)
+    if train_path.resolve() == validation_path.resolve():
+        parser.error("train and validation outputs must be different")
     train_path.parent.mkdir(parents=True, exist_ok=True)
     validation_path.parent.mkdir(parents=True, exist_ok=True)
+    train_temporary = train_path.with_name(train_path.name + ".part")
+    validation_temporary = validation_path.with_name(validation_path.name + ".part")
     limit = int(args.max_output_mb * 1024 * 1024)
     validation_cutoff = int(args.validation_ratio * 10_000)
     seen = set()
     total_bytes = train_count = validation_count = 0
 
-    with train_path.open("w", encoding="utf-8", newline="\n") as train_stream, \
-            validation_path.open("w", encoding="utf-8", newline="\n") as validation_stream:
-        for document in source_texts():
-            for text in clean_paragraph(document, args.min_chars, args.max_chars,
-                                        args.min_cjk_ratio):
-                fingerprint = hashlib.sha256(text.encode("utf-8")).digest()
-                if fingerprint in seen:
-                    continue
-                seen.add(fingerprint)
-                encoded_size = len(text.encode("utf-8")) + 1
-                if total_bytes + encoded_size > limit:
+    try:
+        with train_temporary.open("w", encoding="utf-8", newline="\n") as train_stream, \
+                validation_temporary.open("w", encoding="utf-8", newline="\n") as validation_stream:
+            for document in source_texts():
+                for text in clean_paragraph(document, args.min_chars, args.max_chars,
+                                            args.min_cjk_ratio):
+                    fingerprint = hashlib.sha256(text.encode("utf-8")).digest()
+                    if fingerprint in seen:
+                        continue
+                    seen.add(fingerprint)
+                    encoded_size = len(text.encode("utf-8")) + 1
+                    if total_bytes + encoded_size > limit:
+                        break
+                    if stable_bucket(text, args.seed) < validation_cutoff:
+                        validation_stream.write(text + "\n")
+                        validation_count += 1
+                    else:
+                        train_stream.write(text + "\n")
+                        train_count += 1
+                    total_bytes += encoded_size
+                if total_bytes >= limit:
                     break
-                if stable_bucket(text, args.seed) < validation_cutoff:
-                    validation_stream.write(text + "\n")
-                    validation_count += 1
-                else:
-                    train_stream.write(text + "\n")
-                    train_count += 1
-                total_bytes += encoded_size
-            if total_bytes >= limit:
-                break
-
-    if train_count == 0 or validation_count == 0:
-        raise RuntimeError("filtering produced an empty train or validation file")
+        if train_count == 0 or validation_count == 0:
+            raise RuntimeError("filtering produced an empty train or validation file")
+        train_temporary.replace(train_path)
+        validation_temporary.replace(validation_path)
+    except Exception:
+        train_temporary.unlink(missing_ok=True)
+        validation_temporary.unlink(missing_ok=True)
+        raise
     print(f"wrote {train_count} training and {validation_count} validation paragraphs "
           f"({total_bytes / 1024 / 1024:.1f} MiB total)")
     return 0
