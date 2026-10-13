@@ -54,4 +54,9 @@ void AdamW::zero_grad() {
     for (auto& state : states_) state.parameter->zero_grad();
 }
 
+void AdamW::set_learning_rate(float learning_rate) {
+    if (learning_rate <= 0.0f) throw std::invalid_argument("learning rate must be positive");
+    options_.learning_rate = learning_rate;
+}
+
 }  // namespace tinydl

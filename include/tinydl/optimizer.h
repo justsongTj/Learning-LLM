@@ -21,6 +21,8 @@ public:
     AdamW(std::vector<NamedParameter> parameters, AdamWOptions options = {});
     void step();
     void zero_grad();
+    void set_learning_rate(float learning_rate);
+    float learning_rate() const noexcept { return options_.learning_rate; }
     std::uint64_t step_count() const noexcept { return step_; }
 
 private:

@@ -67,10 +67,28 @@ For a small corpus, reduce `--vocab_size` (for example to 1000). Then train Tiny
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model model.tdl 1000
 ```
 
+Training reserves the final 5% of tokens for validation, reports a rolling 100-step loss,
+and uses linear warmup followed by cosine learning-rate decay. Tune the schedule with
+`--learning-rate`, `--min-learning-rate`, and `--warmup-steps`; change validation frequency
+with `--validation-interval`. To test the optimizer and backward pass independently of corpus
+difficulty, deliberately overfit one fixed sequence:
+
+```bash
+./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
+```
+
 Generate text from the checkpoint:
 
 ```bash
 ./build/tinydl_generate model.tdl tokenizer.model "你好" 100
+```
+
+Sampling defaults to temperature 0.8 and top-k 40. Greedy decoding is useful for inspecting
+the model's most likely continuation, while a fixed seed makes sampling reproducible:
+
+```bash
+./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --temperature 0.1 --top-k 1
+./build/tinydl_generate model.tdl tokenizer.model "你好" 100 --seed 42
 ```
 
 ## Build with DTK/DCU

@@ -41,7 +41,8 @@ int sample_last_token(const tinydl::Tensor& logits,
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::cerr << "usage: tinydl_generate <checkpoint> <tokenizer.model> <prompt> [tokens] [--dcu]\n";
+        std::cerr << "usage: tinydl_generate <checkpoint> <tokenizer.model> <prompt> [tokens] "
+                     "[--temperature value] [--top-k value] [--seed value] [--dcu]\n";
         return 2;
     }
     try {
@@ -49,11 +50,22 @@ int main(int argc, char** argv) {
         const std::string tokenizer_path = argv[2];
         const std::string prompt = argv[3];
         int tokens_to_generate = 100;
+        float temperature = 0.8f;
+        int top_k = 40;
+        unsigned int seed = std::random_device{}();
         bool use_dcu = false;
         for (int i = 4; i < argc; ++i) {
-            if (std::string(argv[i]) == "--dcu") use_dcu = true;
-            else tokens_to_generate = std::stoi(argv[i]);
+            const std::string argument = argv[i];
+            if (argument == "--dcu") use_dcu = true;
+            else if (argument == "--temperature" && i + 1 < argc) temperature = std::stof(argv[++i]);
+            else if (argument == "--top-k" && i + 1 < argc) top_k = std::stoi(argv[++i]);
+            else if (argument == "--seed" && i + 1 < argc) seed = static_cast<unsigned int>(std::stoul(argv[++i]));
+            else if (!argument.empty() && argument[0] != '-') tokens_to_generate = std::stoi(argument);
+            else throw std::invalid_argument("unknown or incomplete option: " + argument);
         }
+        if (tokens_to_generate < 0) throw std::invalid_argument("tokens must not be negative");
+        if (temperature <= 0.0f) throw std::invalid_argument("temperature must be positive");
+        if (top_k <= 0) throw std::invalid_argument("top-k must be positive");
         const auto config = tinydl::read_checkpoint_config(checkpoint_path);
         auto backend = use_dcu ? tinydl::make_dcu_backend() : tinydl::make_cpu_backend();
         tinydl::GptModel model(config, backend);
@@ -63,12 +75,13 @@ int main(int argc, char** argv) {
             throw std::runtime_error("SentencePiece vocabulary does not match checkpoint");
         auto tokens = tokenizer.encode(prompt);
         if (tokens.empty()) throw std::runtime_error("prompt must not be empty");
-        std::mt19937 random(std::random_device{}());
+        std::mt19937 random(seed);
         for (int step = 0; step < tokens_to_generate; ++step) {
             const std::size_t context_size = std::min(tokens.size(),
                 static_cast<std::size_t>(config.max_sequence_length));
             std::vector<int> context(tokens.end() - static_cast<std::ptrdiff_t>(context_size), tokens.end());
-            const int next = sample_last_token(model.forward(context).value(), tokenizer, 0.8f, 40, random);
+            const int next = sample_last_token(model.forward(context).value(), tokenizer,
+                                               temperature, top_k, random);
             tokens.push_back(next);
         }
         std::cout << tokenizer.decode(tokens) << '\n';
