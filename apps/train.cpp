@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -20,6 +21,7 @@
 namespace {
 
 constexpr std::array<char, 8> training_magic{{'T', 'D', 'L', 'T', 'R', 'N', '0', '1'}};
+constexpr std::array<char, 8> corpus_magic{{'T', 'D', 'L', 'C', 'R', 'P', '0', '1'}};
 
 template <typename T>
 void write_value(std::ostream& stream, const T& value) {
@@ -72,9 +74,85 @@ std::uint64_t load_training_state(const std::string& model_path, tinydl::AdamW& 
 
 struct EncodedCorpus {
     std::vector<int> tokens;
-    std::vector<float> loss_weights;
+    std::vector<std::uint8_t> loss_weights;
     std::size_t instruction_paragraphs{0};
 };
+
+struct FileSignature {
+    std::uint64_t size;
+    std::int64_t modified;
+};
+
+FileSignature file_signature(const std::string& path) {
+    const auto size = std::filesystem::file_size(path);
+    const auto modified = std::filesystem::last_write_time(path).time_since_epoch().count();
+    return {static_cast<std::uint64_t>(size), static_cast<std::int64_t>(modified)};
+}
+
+void save_corpus_cache(const std::string& cache_path, const std::string& text_path,
+                       const std::string& tokenizer_path, bool answer_only_loss,
+                       const EncodedCorpus& corpus) {
+    static_assert(sizeof(int) == sizeof(std::int32_t));
+    const std::string temporary_path = cache_path + ".part";
+    std::ofstream stream(temporary_path, std::ios::binary | std::ios::trunc);
+    if (!stream) throw std::runtime_error("cannot open corpus cache for writing: " + temporary_path);
+    const auto text = file_signature(text_path);
+    const auto tokenizer = file_signature(tokenizer_path);
+    stream.write(corpus_magic.data(), static_cast<std::streamsize>(corpus_magic.size()));
+    write_value(stream, text.size);
+    write_value(stream, text.modified);
+    write_value(stream, tokenizer.size);
+    write_value(stream, tokenizer.modified);
+    write_value(stream, static_cast<std::uint8_t>(answer_only_loss));
+    write_value(stream, static_cast<std::uint64_t>(corpus.instruction_paragraphs));
+    write_value(stream, static_cast<std::uint64_t>(corpus.tokens.size()));
+    stream.write(reinterpret_cast<const char*>(corpus.tokens.data()),
+                 static_cast<std::streamsize>(corpus.tokens.size() * sizeof(int)));
+    stream.write(reinterpret_cast<const char*>(corpus.loss_weights.data()),
+                 static_cast<std::streamsize>(corpus.loss_weights.size()));
+    if (!stream) throw std::runtime_error("failed while writing corpus cache: " + temporary_path);
+    stream.close();
+    std::error_code error;
+    std::filesystem::remove(cache_path, error);
+    error.clear();
+    std::filesystem::rename(temporary_path, cache_path, error);
+    if (error) throw std::runtime_error("cannot install corpus cache: " + error.message());
+}
+
+bool load_corpus_cache(const std::string& cache_path, const std::string& text_path,
+                       const std::string& tokenizer_path, bool answer_only_loss,
+                       EncodedCorpus& corpus) {
+    std::ifstream stream(cache_path, std::ios::binary);
+    if (!stream) return false;
+    std::array<char, 8> magic{};
+    stream.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+    if (!stream || magic != corpus_magic) return false;
+    const auto text_size = read_value<std::uint64_t>(stream);
+    const auto text_modified = read_value<std::int64_t>(stream);
+    const auto tokenizer_size = read_value<std::uint64_t>(stream);
+    const auto tokenizer_modified = read_value<std::int64_t>(stream);
+    const auto cached_answer_only = read_value<std::uint8_t>(stream);
+    const auto instruction_paragraphs = read_value<std::uint64_t>(stream);
+    const auto token_count = read_value<std::uint64_t>(stream);
+    const auto text = file_signature(text_path);
+    const auto tokenizer = file_signature(tokenizer_path);
+    if (text_size != text.size || text_modified != text.modified ||
+        tokenizer_size != tokenizer.size || tokenizer_modified != tokenizer.modified ||
+        cached_answer_only != static_cast<std::uint8_t>(answer_only_loss))
+        return false;
+    const auto cache_size = std::filesystem::file_size(cache_path);
+    constexpr std::uint64_t header_size = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8;
+    const std::uint64_t expected_size = header_size + token_count * (sizeof(int) + 1);
+    if (token_count == 0 || cache_size != expected_size) return false;
+    corpus.tokens.resize(static_cast<std::size_t>(token_count));
+    corpus.loss_weights.resize(static_cast<std::size_t>(token_count));
+    corpus.instruction_paragraphs = static_cast<std::size_t>(instruction_paragraphs);
+    stream.read(reinterpret_cast<char*>(corpus.tokens.data()),
+                static_cast<std::streamsize>(corpus.tokens.size() * sizeof(int)));
+    stream.read(reinterpret_cast<char*>(corpus.loss_weights.data()),
+                static_cast<std::streamsize>(corpus.loss_weights.size()));
+    return static_cast<bool>(stream);
+}
 
 EncodedCorpus encode_corpus(const std::string& path,
                             const tinydl::SentencePieceTokenizer& tokenizer,
@@ -122,6 +200,35 @@ EncodedCorpus encode_corpus(const std::string& path,
     return result;
 }
 
+EncodedCorpus load_or_encode_corpus(const std::string& text_path,
+                                    const std::string& tokenizer_path,
+                                    const std::string& cache_path,
+                                    const tinydl::SentencePieceTokenizer& tokenizer,
+                                    bool answer_only_loss) {
+    EncodedCorpus corpus;
+    if (!cache_path.empty()) {
+        try {
+            if (load_corpus_cache(cache_path, text_path, tokenizer_path,
+                                  answer_only_loss, corpus)) {
+                std::cout << "loaded token cache " << cache_path << " ("
+                          << corpus.tokens.size() << " tokens)\n";
+                return corpus;
+            }
+            std::cout << "token cache is missing or stale: " << cache_path << '\n';
+        } catch (const std::exception& error) {
+            std::cout << "ignoring invalid token cache " << cache_path
+                      << ": " << error.what() << '\n';
+        }
+    }
+    corpus = encode_corpus(text_path, tokenizer, answer_only_loss);
+    if (!cache_path.empty()) {
+        save_corpus_cache(cache_path, text_path, tokenizer_path, answer_only_loss, corpus);
+        std::cout << "saved token cache " << cache_path << " (" << corpus.tokens.size()
+                  << " tokens)\n";
+    }
+    return corpus;
+}
+
 std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
     return use_dcu ? tinydl::make_dcu_backend() : tinydl::make_cpu_backend();
 }
@@ -165,6 +272,7 @@ int main(int argc, char** argv) {
                      "[--heads value] [--layers value] [--ffn-channels value] "
                      "[--resume checkpoint] [--resume-step value] [--checkpoint-interval value] "
                      "[--validation-text path] [--gradient-accumulation-steps value] "
+                     "[--training-token-cache path] [--validation-token-cache path] "
                      "[--answer-only-loss] [--overfit-one-batch] [--dcu]\n";
         return 2;
     }
@@ -186,6 +294,8 @@ int main(int argc, char** argv) {
         int gradient_accumulation_steps = 1;
         std::string resume_path;
         std::string validation_path;
+        std::string training_cache_path;
+        std::string validation_cache_path;
         std::int64_t resume_step = -1;
         bool overfit_one_batch = false;
         bool answer_only_loss = false;
@@ -208,6 +318,10 @@ int main(int argc, char** argv) {
             else if (argument == "--resume-step" && i + 1 < argc) resume_step = std::stoll(argv[++i]);
             else if (argument == "--checkpoint-interval" && i + 1 < argc) checkpoint_interval = std::stoi(argv[++i]);
             else if (argument == "--validation-text" && i + 1 < argc) validation_path = argv[++i];
+            else if (argument == "--training-token-cache" && i + 1 < argc)
+                training_cache_path = argv[++i];
+            else if (argument == "--validation-token-cache" && i + 1 < argc)
+                validation_cache_path = argv[++i];
             else if (argument == "--gradient-accumulation-steps" && i + 1 < argc)
                 gradient_accumulation_steps = std::stoi(argv[++i]);
             else if (!argument.empty() && argument[0] != '-') steps = std::stoi(argument);
@@ -221,15 +335,21 @@ int main(int argc, char** argv) {
         if (resume_step < -1) throw std::invalid_argument("resume step must be non-negative");
         if (gradient_accumulation_steps <= 0)
             throw std::invalid_argument("gradient accumulation steps must be positive");
+        if (!validation_cache_path.empty() && validation_path.empty())
+            throw std::invalid_argument(
+                "--validation-token-cache requires --validation-text");
         if (sequence_length <= 0 || channels <= 0 || heads <= 0 || layers <= 0 ||
             ffn_channels <= 0 || channels % heads != 0)
             throw std::invalid_argument("model dimensions must be positive and channels divisible by heads");
 
         tinydl::SentencePieceTokenizer tokenizer(tokenizer_path);
         // Encode each paragraph independently and preserve its boundary with BOS/EOS.
-        const auto corpus = encode_corpus(text_path, tokenizer, answer_only_loss);
+        const auto corpus = load_or_encode_corpus(
+            text_path, tokenizer_path, training_cache_path, tokenizer, answer_only_loss);
         const auto external_validation = validation_path.empty()
-            ? EncodedCorpus{} : encode_corpus(validation_path, tokenizer, answer_only_loss);
+            ? EncodedCorpus{} : load_or_encode_corpus(
+                validation_path, tokenizer_path, validation_cache_path,
+                tokenizer, answer_only_loss);
         if (answer_only_loss) {
             if (corpus.instruction_paragraphs == 0)
                 throw std::runtime_error(
@@ -321,6 +441,8 @@ int main(int argc, char** argv) {
         constexpr std::size_t average_window = 100;
         constexpr float pi = 3.14159265358979323846f;
         const int actual_warmup_steps = std::min(warmup_steps, std::max(0, steps / 10));
+        auto throughput_start = std::chrono::steady_clock::now();
+        int throughput_steps = 0;
         for (int step = 1; step <= steps; ++step)
         {
             const std::uint64_t global_step = completed_steps + static_cast<std::uint64_t>(step);
@@ -371,17 +493,25 @@ int main(int argc, char** argv) {
             loss_value /= static_cast<float>(gradient_accumulation_steps);
             optimizer.step(1.0f / static_cast<float>(gradient_accumulation_steps));
             recent_losses.push_back(loss_value);
+            ++throughput_steps;
             recent_total += loss_value;
             if (recent_losses.size() > average_window) {
                 recent_total -= recent_losses.front();
                 recent_losses.pop_front();
             }
             if (step == 1 || step % 10 == 0) {
+                const auto now = std::chrono::steady_clock::now();
+                const float elapsed = std::chrono::duration<float>(now - throughput_start).count();
+                const float processed_tokens = static_cast<float>(
+                    throughput_steps * gradient_accumulation_steps * config.max_sequence_length);
                 std::cout << std::setprecision(6) << "step " << global_step
                           << " loss " << loss_value
                           << " avg_loss_" << recent_losses.size() << ' '
                           << recent_total / static_cast<float>(recent_losses.size())
-                          << " lr " << current_learning_rate << '\n';
+                          << " lr " << current_learning_rate
+                          << " tokens_per_second " << processed_tokens / elapsed << '\n';
+                throughput_start = now;
+                throughput_steps = 0;
             }
             if (!overfit_one_batch && (step % validation_interval == 0 || step == steps)) {
                 const auto& validation_corpus = validation_path.empty() ? corpus : external_validation;

@@ -95,6 +95,13 @@ remain supervised. Paragraphs without an answer marker, such as mixed-in encyclo
 retain ordinary next-token loss. Validation uses the same masking rule, so compare masked loss
 only with runs evaluated using this option.
 
+Large text corpora can be tokenized once and reused with `--training-token-cache` and
+`--validation-token-cache`. TinyDL validates each cache against the text file, tokenizer file,
+and answer-only setting before loading it. A missing, incomplete, or stale cache is rebuilt
+atomically. The first run still performs SentencePiece encoding; later runs load compact token
+IDs and byte masks directly. Training logs report processed `tokens_per_second` so throughput
+changes can be compared independently of optimizer-step semantics.
+
 ```bash
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
 ```
@@ -202,6 +209,8 @@ network failure cannot leave an incomplete file under the requested final name.
   --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0 \
   --gradient-accumulation-steps 8 \
   --answer-only-loss \
+  --training-token-cache "$HOME/tujie/apps/datasets/corpus_zh_instruction_v2_train.tdlcache" \
+  --validation-token-cache "$HOME/tujie/apps/datasets/corpus_zh_instruction_v2_validation.tdlcache" \
   --validation-interval 500 --checkpoint-interval 2500 --dcu
 ```
 
