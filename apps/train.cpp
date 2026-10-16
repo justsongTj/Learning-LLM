@@ -128,19 +128,25 @@ std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
 
 float evaluate(tinydl::GptModel& model, const EncodedCorpus& corpus,
                std::size_t begin, int sequence_length) {
-    constexpr int max_samples = 32;
+    constexpr std::size_t max_samples = 32;
+    const std::size_t length = static_cast<std::size_t>(sequence_length);
+    if (begin + length >= corpus.tokens.size()) return 0.0f;
+
+    const std::size_t available_starts = corpus.tokens.size() - begin - length;
+    const std::size_t candidate_count = std::min(max_samples, available_starts);
     float total = 0.0f;
-    int samples = 0;
-    for (std::size_t start = begin;
-         start + static_cast<std::size_t>(sequence_length) < corpus.tokens.size() && samples < max_samples;
-         start += static_cast<std::size_t>(sequence_length)) {
+    std::size_t samples = 0;
+    for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
+        const std::size_t relative_start = candidate_count == 1
+            ? 0 : candidate * (available_starts - 1) / (candidate_count - 1);
+        const std::size_t start = begin + relative_start;
         std::vector<int> input(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start),
-                               corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + sequence_length));
+                               corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + length));
         std::vector<int> target(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + 1),
-                                corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + sequence_length + 1));
+                                corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + length + 1));
         std::vector<float> weights(
             corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + 1),
-            corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + sequence_length + 1));
+            corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + length + 1));
         if (std::none_of(weights.begin(), weights.end(), [](float value) { return value > 0.0f; }))
             continue;
         total += tinydl::cross_entropy(model.forward(input), target, weights).value().to_vector()[0];
