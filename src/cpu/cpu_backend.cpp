@@ -145,6 +145,7 @@ public:
     }
 
     void cross_entropy_forward(const float* logits, const float* targets,
+                               const float* weights, float normalizer,
                                float* probabilities, float* loss, int rows, int cols) override {
         *loss = 0.0f;
         for (int row = 0; row < rows; ++row) {
@@ -158,17 +159,19 @@ public:
             }
             for (int col = 0; col < cols; ++col) probabilities[row * cols + col] /= denominator;
             const int target = static_cast<int>(targets[row]);
-            *loss -= std::log(std::max(probabilities[row * cols + target], 1.0e-30f));
+            *loss -= weights[row] *
+                std::log(std::max(probabilities[row * cols + target], 1.0e-30f));
         }
-        *loss /= static_cast<float>(rows);
+        *loss /= normalizer;
     }
 
     void cross_entropy_backward(const float* probabilities, const float* targets,
+                                const float* weights, float normalizer,
                                 const float* upstream, float* grad,
                                 int rows, int cols) override {
-        const float scale = upstream[0] / static_cast<float>(rows);
         for (int row = 0; row < rows; ++row) {
             const int target = static_cast<int>(targets[row]);
+            const float scale = upstream[0] * weights[row] / normalizer;
             for (int col = 0; col < cols; ++col) {
                 const float delta = probabilities[row * cols + col] - (col == target ? 1.0f : 0.0f);
                 grad[row * cols + col] = delta * scale;

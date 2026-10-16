@@ -106,6 +106,7 @@ __global__ void adamw_kernel(float* values, const float* gradients,
 }
 
 __global__ void cross_entropy_forward_kernel(const float* logits, const float* targets,
+                                             const float* weights, float normalizer,
                                              float* probabilities, float* loss,
                                              int rows, int cols) {
     const int row = blockIdx.x;
@@ -121,10 +122,11 @@ __global__ void cross_entropy_forward_kernel(const float* logits, const float* t
     }
     for (int col = 0; col < cols; ++col) output[col] /= denominator;
     const int target = static_cast<int>(targets[row]);
-    atomicAdd(loss, -logf(fmaxf(output[target], 1.0e-30f)) / static_cast<float>(rows));
+    atomicAdd(loss, -weights[row] * logf(fmaxf(output[target], 1.0e-30f)) / normalizer);
 }
 
 __global__ void cross_entropy_backward_kernel(const float* probabilities, const float* targets,
+                                              const float* weights, float normalizer,
                                               const float* upstream, float* grad,
                                               int rows, int cols) {
     const std::size_t index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -134,7 +136,7 @@ __global__ void cross_entropy_backward_kernel(const float* probabilities, const 
     const int col = static_cast<int>(index % cols);
     const int target = static_cast<int>(targets[row]);
     const float delta = probabilities[index] - (col == target ? 1.0f : 0.0f);
-    grad[index] = delta * upstream[0] / static_cast<float>(rows);
+    grad[index] = delta * upstream[0] * weights[row] / normalizer;
 }
 
 __global__ void softmax_rows_kernel(const float* x, float* out, int cols) {
@@ -345,16 +347,19 @@ public:
     }
 
     void cross_entropy_forward(const float* logits, const float* targets,
+                               const float* weights, float normalizer,
                                float* probabilities, float* loss, int rows, int cols) override {
         activate();
         check_hip(hipMemsetAsync(loss, 0, sizeof(float), stream_),
                   "hipMemsetAsync cross entropy loss");
         hipLaunchKernelGGL(cross_entropy_forward_kernel, dim3(rows), dim3(1), 0, stream_,
-                           logits, targets, probabilities, loss, rows, cols);
+                           logits, targets, weights, normalizer,
+                           probabilities, loss, rows, cols);
         check_hip(hipGetLastError(), "cross_entropy_forward_kernel");
     }
 
     void cross_entropy_backward(const float* probabilities, const float* targets,
+                                const float* weights, float normalizer,
                                 const float* upstream, float* grad,
                                 int rows, int cols) override {
         activate();
@@ -362,7 +367,8 @@ public:
         const std::size_t count = static_cast<std::size_t>(rows) * cols;
         const unsigned blocks = static_cast<unsigned>((count + threads - 1) / threads);
         hipLaunchKernelGGL(cross_entropy_backward_kernel, dim3(blocks), dim3(threads), 0, stream_,
-                           probabilities, targets, upstream, grad, rows, cols);
+                           probabilities, targets, weights, normalizer,
+                           upstream, grad, rows, cols);
         check_hip(hipGetLastError(), "cross_entropy_backward_kernel");
     }
 

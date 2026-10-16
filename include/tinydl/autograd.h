@@ -40,7 +40,8 @@ private:
     friend Variable embedding(const Variable&, const std::vector<int>&);
     friend Variable causal_self_attention(const Variable&, const Variable&, const Variable&,
                                            int);
-    friend Variable cross_entropy(const Variable&, const std::vector<int>&);
+    friend Variable cross_entropy(const Variable&, const std::vector<int>&,
+                                  const std::vector<float>&);
 };
 
 Variable add(const Variable& a, const Variable& b);
@@ -52,6 +53,7 @@ Variable layer_norm(const Variable& x, const Variable& weight, const Variable& b
 Variable embedding(const Variable& table, const std::vector<int>& token_ids);
 Variable causal_self_attention(const Variable& q, const Variable& k, const Variable& v,
                                int num_heads);
-Variable cross_entropy(const Variable& logits, const std::vector<int>& targets);
+Variable cross_entropy(const Variable& logits, const std::vector<int>& targets,
+                       const std::vector<float>& weights = {});
 
 }  // namespace tinydl

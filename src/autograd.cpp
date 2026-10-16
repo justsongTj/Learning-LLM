@@ -326,30 +326,44 @@ Variable causal_self_attention(const Variable& q, const Variable& k, const Varia
         });
 }
 
-Variable cross_entropy(const Variable& logits, const std::vector<int>& targets) {
+Variable cross_entropy(const Variable& logits, const std::vector<int>& targets,
+                       const std::vector<float>& weights) {
     if (logits.value().ndim() != 2 || logits.value().shape()[0] != targets.size())
         throw std::invalid_argument("cross_entropy expects logits=[tokens,vocab] and one target per token");
     const std::size_t rows = logits.value().shape()[0];
     const std::size_t cols = logits.value().shape()[1];
     std::vector<float> target_values(rows);
+    std::vector<float> weight_values = weights.empty() ? std::vector<float>(rows, 1.0f) : weights;
+    if (weight_values.size() != rows)
+        throw std::invalid_argument("cross_entropy expects one weight per token");
+    float normalizer = 0.0f;
     for (std::size_t row = 0; row < rows; ++row) {
         if (targets[row] < 0 || static_cast<std::size_t>(targets[row]) >= cols)
             throw std::out_of_range("cross_entropy target is outside vocabulary");
         target_values[row] = static_cast<float>(targets[row]);
+        if (!std::isfinite(weight_values[row]) || weight_values[row] < 0.0f)
+            throw std::invalid_argument("cross_entropy weights must be finite and non-negative");
+        normalizer += weight_values[row];
     }
+    if (normalizer <= 0.0f)
+        throw std::invalid_argument("cross_entropy requires at least one positive weight");
     Tensor target_tensor({rows}, logits.value().backend());
     target_tensor.copy_from(target_values);
+    Tensor weight_tensor({rows}, logits.value().backend());
+    weight_tensor.copy_from(weight_values);
     Tensor probabilities(logits.value().shape(), logits.value().backend());
     Tensor output({1}, logits.value().backend());
     logits.value().backend()->cross_entropy_forward(
-        logits.value().data(), target_tensor.data(), probabilities.data(), output.data(),
+        logits.value().data(), target_tensor.data(), weight_tensor.data(), normalizer,
+        probabilities.data(), output.data(),
         static_cast<int>(rows), static_cast<int>(cols));
     return Variable::from_graph(std::move(output), logits.requires_grad(), {logits},
-        [logits, target_tensor, probabilities, rows, cols](const Tensor& grad) {
+        [logits, target_tensor, weight_tensor, probabilities, normalizer, rows, cols](const Tensor& grad) {
             if (!logits.requires_grad()) return;
             Tensor dx(logits.value().shape(), logits.value().backend());
             logits.value().backend()->cross_entropy_backward(
-                probabilities.data(), target_tensor.data(), grad.data(), dx.data(),
+                probabilities.data(), target_tensor.data(), weight_tensor.data(), normalizer,
+                grad.data(), dx.data(),
                 static_cast<int>(rows), static_cast<int>(cols));
             logits.accumulate_grad(dx);
         });

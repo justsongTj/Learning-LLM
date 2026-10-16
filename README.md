@@ -89,6 +89,12 @@ sequences before each AdamW update. The positional `steps` argument continues to
 optimizer updates, so `N=8` processes eight times as many training tokens per step while
 preserving checkpoint and learning-rate schedule semantics.
 
+For corpora prepared with `--instruction-format`, pass `--answer-only-loss` to exclude the
+`问题:`/`输入:` prefix from the loss of instruction paragraphs. Tokens after `回答:` through EOS
+remain supervised. Paragraphs without an answer marker, such as mixed-in encyclopedia text,
+retain ordinary next-token loss. Validation uses the same masking rule, so compare masked loss
+only with runs evaluated using this option.
+
 ```bash
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
 ```
@@ -195,6 +201,7 @@ network failure cannot leave an incomplete file under the requested final name.
   --resume "$HOME/tujie/apps/tinydl-artifacts/model-wiki-zh-8k-eos-30k.tdl" \
   --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0 \
   --gradient-accumulation-steps 8 \
+  --answer-only-loss \
   --validation-interval 500 --checkpoint-interval 2500 --dcu
 ```
 

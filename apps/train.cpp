@@ -70,21 +70,53 @@ std::uint64_t load_training_state(const std::string& model_path, tinydl::AdamW& 
     return completed_steps;
 }
 
-std::vector<int> encode_corpus(const std::string& path,
-                               const tinydl::SentencePieceTokenizer& tokenizer) {
+struct EncodedCorpus {
+    std::vector<int> tokens;
+    std::vector<float> loss_weights;
+    std::size_t instruction_paragraphs{0};
+};
+
+EncodedCorpus encode_corpus(const std::string& path,
+                            const tinydl::SentencePieceTokenizer& tokenizer,
+                            bool answer_only_loss) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) throw std::runtime_error("cannot open training text: " + path);
     if (tokenizer.eos_id() < 0)
         throw std::runtime_error("SentencePiece model has no EOS token; retrain it with --eos_id=2");
-    std::vector<int> result;
+    EncodedCorpus result;
     std::string line;
     while (std::getline(stream, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
-        if (tokenizer.bos_id() >= 0) result.push_back(tokenizer.bos_id());
-        auto encoded = tokenizer.encode(line);
-        result.insert(result.end(), encoded.begin(), encoded.end());
-        result.push_back(tokenizer.eos_id());
+        const std::string marker = "回答:";
+        const std::string full_width_marker = "回答：";
+        std::size_t answer_position = answer_only_loss ? line.find(marker) : std::string::npos;
+        std::size_t marker_size = marker.size();
+        if (answer_only_loss && answer_position == std::string::npos) {
+            answer_position = line.find(full_width_marker);
+            marker_size = full_width_marker.size();
+        }
+
+        if (tokenizer.bos_id() >= 0) {
+            result.tokens.push_back(tokenizer.bos_id());
+            result.loss_weights.push_back(answer_position == std::string::npos ? 1.0f : 0.0f);
+        }
+        if (answer_position == std::string::npos) {
+            auto encoded = tokenizer.encode(line);
+            result.tokens.insert(result.tokens.end(), encoded.begin(), encoded.end());
+            result.loss_weights.insert(result.loss_weights.end(), encoded.size(), 1.0f);
+        } else {
+            const std::size_t answer_begin = answer_position + marker_size;
+            auto prefix = tokenizer.encode(line.substr(0, answer_begin));
+            auto answer = tokenizer.encode(line.substr(answer_begin));
+            result.tokens.insert(result.tokens.end(), prefix.begin(), prefix.end());
+            result.loss_weights.insert(result.loss_weights.end(), prefix.size(), 0.0f);
+            result.tokens.insert(result.tokens.end(), answer.begin(), answer.end());
+            result.loss_weights.insert(result.loss_weights.end(), answer.size(), 1.0f);
+            ++result.instruction_paragraphs;
+        }
+        result.tokens.push_back(tokenizer.eos_id());
+        result.loss_weights.push_back(1.0f);
     }
     if (!stream.eof()) throw std::runtime_error("failed while reading training text: " + path);
     return result;
@@ -94,19 +126,24 @@ std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
     return use_dcu ? tinydl::make_dcu_backend() : tinydl::make_cpu_backend();
 }
 
-float evaluate(tinydl::GptModel& model, const std::vector<int>& corpus,
+float evaluate(tinydl::GptModel& model, const EncodedCorpus& corpus,
                std::size_t begin, int sequence_length) {
     constexpr int max_samples = 32;
     float total = 0.0f;
     int samples = 0;
     for (std::size_t start = begin;
-         start + static_cast<std::size_t>(sequence_length) < corpus.size() && samples < max_samples;
+         start + static_cast<std::size_t>(sequence_length) < corpus.tokens.size() && samples < max_samples;
          start += static_cast<std::size_t>(sequence_length)) {
-        std::vector<int> input(corpus.begin() + static_cast<std::ptrdiff_t>(start),
-                               corpus.begin() + static_cast<std::ptrdiff_t>(start + sequence_length));
-        std::vector<int> target(corpus.begin() + static_cast<std::ptrdiff_t>(start + 1),
-                                corpus.begin() + static_cast<std::ptrdiff_t>(start + sequence_length + 1));
-        total += tinydl::cross_entropy(model.forward(input), target).value().to_vector()[0];
+        std::vector<int> input(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start),
+                               corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + sequence_length));
+        std::vector<int> target(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + 1),
+                                corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + sequence_length + 1));
+        std::vector<float> weights(
+            corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + 1),
+            corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + sequence_length + 1));
+        if (std::none_of(weights.begin(), weights.end(), [](float value) { return value > 0.0f; }))
+            continue;
+        total += tinydl::cross_entropy(model.forward(input), target, weights).value().to_vector()[0];
         ++samples;
     }
     return samples == 0 ? 0.0f : total / static_cast<float>(samples);
@@ -122,7 +159,7 @@ int main(int argc, char** argv) {
                      "[--heads value] [--layers value] [--ffn-channels value] "
                      "[--resume checkpoint] [--resume-step value] [--checkpoint-interval value] "
                      "[--validation-text path] [--gradient-accumulation-steps value] "
-                     "[--overfit-one-batch] [--dcu]\n";
+                     "[--answer-only-loss] [--overfit-one-batch] [--dcu]\n";
         return 2;
     }
     try {
@@ -145,11 +182,13 @@ int main(int argc, char** argv) {
         std::string validation_path;
         std::int64_t resume_step = -1;
         bool overfit_one_batch = false;
+        bool answer_only_loss = false;
         bool use_dcu = false;
         for (int i = 4; i < argc; ++i) {
             const std::string argument = argv[i];
             if (argument == "--dcu") use_dcu = true;
             else if (argument == "--overfit-one-batch") overfit_one_batch = true;
+            else if (argument == "--answer-only-loss") answer_only_loss = true;
             else if (argument == "--learning-rate" && i + 1 < argc) learning_rate = std::stof(argv[++i]);
             else if (argument == "--min-learning-rate" && i + 1 < argc) min_learning_rate = std::stof(argv[++i]);
             else if (argument == "--warmup-steps" && i + 1 < argc) warmup_steps = std::stoi(argv[++i]);
@@ -182,9 +221,20 @@ int main(int argc, char** argv) {
 
         tinydl::SentencePieceTokenizer tokenizer(tokenizer_path);
         // Encode each paragraph independently and preserve its boundary with BOS/EOS.
-        const auto corpus = encode_corpus(text_path, tokenizer);
+        const auto corpus = encode_corpus(text_path, tokenizer, answer_only_loss);
         const auto external_validation = validation_path.empty()
-            ? std::vector<int>{} : encode_corpus(validation_path, tokenizer);
+            ? EncodedCorpus{} : encode_corpus(validation_path, tokenizer, answer_only_loss);
+        if (answer_only_loss) {
+            if (corpus.instruction_paragraphs == 0)
+                throw std::runtime_error(
+                    "--answer-only-loss found no paragraphs containing an answer marker");
+            std::cout << "answer-only loss enabled for " << corpus.instruction_paragraphs
+                      << " training paragraphs";
+            if (!validation_path.empty())
+                std::cout << " and " << external_validation.instruction_paragraphs
+                          << " validation paragraphs";
+            std::cout << '\n';
+        }
         //定义要训练的GPT模型结构
         tinydl::GptConfig config;
         config.vocab_size = tokenizer.vocabulary_size();
@@ -194,7 +244,7 @@ int main(int argc, char** argv) {
         config.num_layers = layers;
         config.ffn_channels = ffn_channels;
         if (!resume_path.empty()) config = tinydl::read_checkpoint_config(resume_path);
-        if (corpus.size() <= static_cast<std::size_t>(config.max_sequence_length))
+        if (corpus.tokens.size() <= static_cast<std::size_t>(config.max_sequence_length))
             throw std::runtime_error("training text is shorter than one sequence");
 
         tinydl::GptModel model(config, select_backend(use_dcu));//创建模型，使用什么后端
@@ -204,17 +254,32 @@ int main(int argc, char** argv) {
         tinydl::AdamW optimizer(model.named_parameters(), optimizer_options);//创建AdamW优化器把模型所有可训练参数交给 AdamW，让 AdamW 负责在反向传播后更新它们。
         std::mt19937 random(42);//随机数生成器，用来随机选择训练语料片段的位置
         const std::size_t minimum_split = static_cast<std::size_t>(config.max_sequence_length + 1);
-        const std::size_t validation_size = std::max(minimum_split, corpus.size() / 20);
+        const std::size_t validation_size = std::max(minimum_split, corpus.tokens.size() / 20);
         if (!overfit_one_batch && validation_path.empty() &&
-            corpus.size() <= validation_size + minimum_split)
+            corpus.tokens.size() <= validation_size + minimum_split)
             throw std::runtime_error("training text is too short for a training/validation split");
         if (!overfit_one_batch && !validation_path.empty() &&
-            external_validation.size() <= minimum_split)
+            external_validation.tokens.size() <= minimum_split)
             throw std::runtime_error("validation text is shorter than one sequence");
         const std::size_t training_end = overfit_one_batch || !validation_path.empty()
-            ? corpus.size() : corpus.size() - validation_size;
+            ? corpus.tokens.size() : corpus.tokens.size() - validation_size;
         std::uniform_int_distribution<std::size_t> start_distribution(
             0, training_end - static_cast<std::size_t>(config.max_sequence_length) - 1);//定义随机起点范围 从tokenizer编码后的语料中随机选择一个起点，截取长度为max_sequence_length的片段作为训练样本
+        std::size_t overfit_start = 0;
+        if (overfit_one_batch && answer_only_loss) {
+            const std::size_t length = static_cast<std::size_t>(config.max_sequence_length);
+            while (overfit_start + length < training_end) {
+                const auto weights_begin = corpus.loss_weights.begin() +
+                    static_cast<std::ptrdiff_t>(overfit_start + 1);
+                if (std::any_of(weights_begin, weights_begin + length,
+                                [](float value) { return value > 0.0f; }))
+                    break;
+                ++overfit_start;
+            }
+            if (overfit_start + length >= training_end)
+                throw std::runtime_error(
+                    "could not find an overfit sequence with answer tokens");
+        }
 
         std::uint64_t completed_steps = 0;
         if (!resume_path.empty()) {
@@ -267,16 +332,33 @@ int main(int argc, char** argv) {
             optimizer.zero_grad();
             float loss_value = 0.0f;
             for (int micro_step = 0; micro_step < gradient_accumulation_steps; ++micro_step) {
-                const std::size_t start = overfit_one_batch ? 0 : start_distribution(random);
+                std::size_t start = overfit_one_batch ? overfit_start : start_distribution(random);
+                if (answer_only_loss && !overfit_one_batch) {
+                    for (int attempt = 0; attempt < 1024; ++attempt) {
+                        const auto weights_begin = corpus.loss_weights.begin() +
+                            static_cast<std::ptrdiff_t>(start + 1);
+                        if (std::any_of(weights_begin,
+                                        weights_begin + config.max_sequence_length,
+                                        [](float value) { return value > 0.0f; }))
+                            break;
+                        start = start_distribution(random);
+                        if (attempt == 1023)
+                            throw std::runtime_error("could not sample a sequence with loss-bearing tokens");
+                    }
+                }
                 std::vector<int> input(
-                    corpus.begin() + static_cast<std::ptrdiff_t>(start),
-                    corpus.begin() + static_cast<std::ptrdiff_t>(
+                    corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start),
+                    corpus.tokens.begin() + static_cast<std::ptrdiff_t>(
                         start + config.max_sequence_length));
                 std::vector<int> target(
-                    corpus.begin() + static_cast<std::ptrdiff_t>(start + 1),
-                    corpus.begin() + static_cast<std::ptrdiff_t>(
+                    corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + 1),
+                    corpus.tokens.begin() + static_cast<std::ptrdiff_t>(
                         start + config.max_sequence_length + 1));
-                auto loss = tinydl::cross_entropy(model.forward(input), target);
+                std::vector<float> weights(
+                    corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + 1),
+                    corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(
+                        start + config.max_sequence_length + 1));
+                auto loss = tinydl::cross_entropy(model.forward(input), target, weights);
                 loss_value += loss.value().to_vector()[0];
                 loss.backward();
             }

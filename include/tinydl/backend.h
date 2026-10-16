@@ -38,8 +38,10 @@ public:
                               float learning_rate, float epsilon, float weight_decay,
                               float gradient_scale) = 0;
     virtual void cross_entropy_forward(const float* logits, const float* targets,
+                                       const float* weights, float normalizer,
                                        float* probabilities, float* loss, int rows, int cols) = 0;
     virtual void cross_entropy_backward(const float* probabilities, const float* targets,
+                                        const float* weights, float normalizer,
                                         const float* upstream, float* grad,
                                         int rows, int cols) = 0;
 };

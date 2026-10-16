@@ -40,6 +40,27 @@ int main() {
                      {1.496638f, -1.496638f, 1.993286f, -1.993286f},
                      1.0e-5f, "weight gradient");
 
+        tinydl::Tensor masked_logits_tensor({2, 2}, cpu);
+        masked_logits_tensor.copy_from({2.0f, 0.0f, 0.0f, 2.0f});
+        tinydl::Variable masked_logits(std::move(masked_logits_tensor), true);
+        auto masked_loss = tinydl::cross_entropy(masked_logits, {0, 0}, {1.0f, 0.0f});
+        expect_close(masked_loss.value().to_vector(), {0.126928f},
+                     1.0e-5f, "masked cross entropy loss");
+        masked_loss.backward();
+        if (!masked_logits.grad()) throw std::runtime_error("missing masked loss gradient");
+        expect_close(masked_logits.grad()->to_vector(),
+                     {-0.119203f, 0.119203f, 0.0f, 0.0f},
+                     1.0e-5f, "masked cross entropy gradient");
+
+        bool rejected_empty_mask = false;
+        try {
+            static_cast<void>(tinydl::cross_entropy(masked_logits, {0, 0}, {0.0f, 0.0f}));
+        } catch (const std::invalid_argument&) {
+            rejected_empty_mask = true;
+        }
+        if (!rejected_empty_mask)
+            throw std::runtime_error("cross entropy accepted an empty loss mask");
+
         tinydl::Tensor parameter_tensor({2}, cpu);
         tinydl::Tensor gradient_tensor({2}, cpu);
         parameter_tensor.copy_from({1.0f, 2.0f});
