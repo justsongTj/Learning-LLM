@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
                      "[--validation-interval value] [--sequence-length value] [--channels value] "
                      "[--heads value] [--layers value] [--ffn-channels value] "
                      "[--resume checkpoint] [--resume-step value] [--checkpoint-interval value] "
-                     "[--validation-text path] "
+                     "[--validation-text path] [--gradient-accumulation-steps value] "
                      "[--overfit-one-batch] [--dcu]\n";
         return 2;
     }
@@ -140,6 +140,7 @@ int main(int argc, char** argv) {
         int layers = 4;
         int ffn_channels = 512;
         int checkpoint_interval = 5000;
+        int gradient_accumulation_steps = 1;
         std::string resume_path;
         std::string validation_path;
         std::int64_t resume_step = -1;
@@ -162,6 +163,8 @@ int main(int argc, char** argv) {
             else if (argument == "--resume-step" && i + 1 < argc) resume_step = std::stoll(argv[++i]);
             else if (argument == "--checkpoint-interval" && i + 1 < argc) checkpoint_interval = std::stoi(argv[++i]);
             else if (argument == "--validation-text" && i + 1 < argc) validation_path = argv[++i];
+            else if (argument == "--gradient-accumulation-steps" && i + 1 < argc)
+                gradient_accumulation_steps = std::stoi(argv[++i]);
             else if (!argument.empty() && argument[0] != '-') steps = std::stoi(argument);
             else throw std::invalid_argument("unknown or incomplete option: " + argument);
         }
@@ -171,6 +174,8 @@ int main(int argc, char** argv) {
         if (warmup_steps < 0 || validation_interval <= 0 || checkpoint_interval < 0)
             throw std::invalid_argument("warmup/checkpoint interval must be non-negative and validation interval positive");
         if (resume_step < -1) throw std::invalid_argument("resume step must be non-negative");
+        if (gradient_accumulation_steps <= 0)
+            throw std::invalid_argument("gradient accumulation steps must be positive");
         if (sequence_length <= 0 || channels <= 0 || heads <= 0 || layers <= 0 ||
             ffn_channels <= 0 || channels % heads != 0)
             throw std::invalid_argument("model dimensions must be positive and channels divisible by heads");
@@ -259,18 +264,24 @@ int main(int argc, char** argv) {
                                         (1.0f + std::cos(pi * progress));
             }
             optimizer.set_learning_rate(current_learning_rate);
-            const std::size_t start = overfit_one_batch ? 0 : start_distribution(random);
-            //构造输入
-            std::vector<int> input(corpus.begin() + static_cast<std::ptrdiff_t>(start),
-                                   corpus.begin() + static_cast<std::ptrdiff_t>(start + config.max_sequence_length));
-            //构造正确答案
-            std::vector<int> target(corpus.begin() + static_cast<std::ptrdiff_t>(start + 1),
-                                    corpus.begin() + static_cast<std::ptrdiff_t>(start + config.max_sequence_length + 1));
             optimizer.zero_grad();
-            auto loss = tinydl::cross_entropy(model.forward(input), target);
-            const float loss_value = loss.value().to_vector()[0];
-            loss.backward();
-            optimizer.step();
+            float loss_value = 0.0f;
+            for (int micro_step = 0; micro_step < gradient_accumulation_steps; ++micro_step) {
+                const std::size_t start = overfit_one_batch ? 0 : start_distribution(random);
+                std::vector<int> input(
+                    corpus.begin() + static_cast<std::ptrdiff_t>(start),
+                    corpus.begin() + static_cast<std::ptrdiff_t>(
+                        start + config.max_sequence_length));
+                std::vector<int> target(
+                    corpus.begin() + static_cast<std::ptrdiff_t>(start + 1),
+                    corpus.begin() + static_cast<std::ptrdiff_t>(
+                        start + config.max_sequence_length + 1));
+                auto loss = tinydl::cross_entropy(model.forward(input), target);
+                loss_value += loss.value().to_vector()[0];
+                loss.backward();
+            }
+            loss_value /= static_cast<float>(gradient_accumulation_steps);
+            optimizer.step(1.0f / static_cast<float>(gradient_accumulation_steps));
             recent_losses.push_back(loss_value);
             recent_total += loss_value;
             if (recent_losses.size() > average_window) {

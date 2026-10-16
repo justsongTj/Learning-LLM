@@ -42,6 +42,8 @@ def main() -> int:
     parser.add_argument("--text-column", default="text")
     parser.add_argument("--text-columns",
                         help="comma-separated fields to join, for example instruction,input,output")
+    parser.add_argument("--instruction-format", action="store_true",
+                        help="format instruction/input/output fields as a supervised QA paragraph")
     parser.add_argument("--local-text", action="append", default=[],
                         help="local UTF-8 text file to mix in; may be repeated")
     parser.add_argument("--train-output", required=True)
@@ -68,12 +70,25 @@ def main() -> int:
 
     text_columns = ([field.strip() for field in args.text_columns.split(",") if field.strip()]
                     if args.text_columns else [args.text_column])
+    if args.instruction_format and not {"instruction", "output"}.issubset(text_columns):
+        parser.error("--instruction-format requires instruction and output in --text-columns")
 
     def row_text(row):
         missing = [field for field in text_columns if field not in row]
         if missing:
             raise RuntimeError(
                 f"dataset row has no {missing!r} column(s); available: {sorted(row)}")
+        if args.instruction_format:
+            instruction = str(row.get("instruction") or "").strip()
+            input_text = str(row.get("input") or "").strip()
+            output = str(row.get("output") or "").strip()
+            if not instruction or not output:
+                return ""
+            parts = [f"问题:{instruction}"]
+            if input_text:
+                parts.append(f"输入:{input_text}")
+            parts.append(f"回答:{output}")
+            return " ".join(parts)
         values = [row[field].strip() for field in text_columns
                   if isinstance(row[field], str) and row[field].strip()]
         return " ".join(values)

@@ -120,7 +120,17 @@ int main(int argc, char** argv) {
             tokens.push_back(next);
             if (next == tokenizer.eos_id()) break;
         }
-        std::cout << tokenizer.decode(tokens) << '\n';
+        std::string decoded = tokenizer.decode(tokens);
+        // Byte fallback may leave an incomplete UTF-8 character when generation stops
+        // exactly at the token limit. SentencePiece represents that suffix as U+FFFD.
+        constexpr char replacement[] = "\xEF\xBF\xBD";
+        constexpr std::size_t replacement_size = sizeof(replacement) - 1;
+        while (decoded.size() >= replacement_size &&
+               decoded.compare(decoded.size() - replacement_size,
+                               replacement_size, replacement) == 0) {
+            decoded.resize(decoded.size() - replacement_size);
+        }
+        std::cout << decoded << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "generation failed: " << error.what() << '\n';

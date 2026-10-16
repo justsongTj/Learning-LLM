@@ -54,6 +54,17 @@ int main() {
         optimizer.step();
         expect_close(parameter.value().to_vector(), {0.9899f, 2.0098f},
                      1.0e-5f, "AdamW update");
+
+        tinydl::Tensor accumulated_parameter_tensor({2}, cpu);
+        accumulated_parameter_tensor.copy_from({1.0f, 2.0f});
+        tinydl::Variable accumulated_parameter(std::move(accumulated_parameter_tensor), true);
+        accumulated_parameter.accumulate_grad(gradient_tensor);
+        accumulated_parameter.accumulate_grad(gradient_tensor);
+        tinydl::AdamW accumulated_optimizer(
+            {{"parameter", &accumulated_parameter}}, options);
+        accumulated_optimizer.step(0.5f);
+        expect_close(accumulated_parameter.value().to_vector(), {0.9899f, 2.0098f},
+                     1.0e-5f, "scaled accumulated AdamW update");
         std::cout << "TinyDL autograd smoke test passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

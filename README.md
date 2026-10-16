@@ -84,6 +84,11 @@ the random sampler state. Change this with `--checkpoint-interval` (zero disable
 checkpoints). To test the optimizer and backward pass independently of corpus difficulty,
 deliberately overfit one fixed sequence:
 
+Use `--gradient-accumulation-steps N` to average gradients from `N` independently sampled
+sequences before each AdamW update. The positional `steps` argument continues to count
+optimizer updates, so `N=8` processes eight times as many training tokens per step while
+preserving checkpoint and learning-rate schedule semantics.
+
 ```bash
 ./build/tinydl_train data/corpus_zh.txt tokenizer.model overfit.tdl 1000 --overfit-one-batch
 ```
@@ -171,6 +176,7 @@ python3 scripts/prepare_hf_corpus.py \
   --modelscope-dataset AI-ModelScope/train_1M_CN \
   --split train \
   --text-columns instruction,input,output \
+  --instruction-format \
   --max-output-mb 200 \
   --train-output "$HOME/tujie/apps/datasets/corpus_zh_200mb_train.txt" \
   --validation-output "$HOME/tujie/apps/datasets/corpus_zh_fixed_validation.txt"
@@ -188,6 +194,7 @@ network failure cannot leave an incomplete file under the requested final name.
   --validation-text "$HOME/tujie/apps/datasets/corpus_zh_fixed_validation.txt" \
   --resume "$HOME/tujie/apps/tinydl-artifacts/model-wiki-zh-8k-eos-30k.tdl" \
   --learning-rate 3e-5 --min-learning-rate 1e-5 --warmup-steps 0 \
+  --gradient-accumulation-steps 8 \
   --validation-interval 500 --checkpoint-interval 2500 --dcu
 ```
 
@@ -234,7 +241,8 @@ target name in `CMakeLists.txt`; the C++ backend interface does not change.
 
 ## Deliberate limitations
 
-- sequences are processed one at a time; batching is not implemented yet;
+- physical tensor batching is not implemented; gradient accumulation provides a configurable
+  effective batch across independently sampled sequences;
 - attention is the readable quadratic implementation and has no KV cache;
 - only contiguous FP32 tensors are supported;
 - AdamW moment state lives in the `.tdl.state` sidecar rather than the model file;

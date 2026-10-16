@@ -37,7 +37,9 @@ AdamW::AdamW(std::vector<NamedParameter> parameters, AdamWOptions options)
     }
 }
 
-void AdamW::step() {
+void AdamW::step(float gradient_scale) {
+    if (gradient_scale <= 0.0f)
+        throw std::invalid_argument("gradient scale must be positive");
     ++step_;
     double squared_norm = 0.0;
     for (const auto& state : states_) {
@@ -45,7 +47,7 @@ void AdamW::step() {
             squared_norm += state.parameter->value().backend()->squared_l2_norm(
                 grad->data(), grad->numel());
     }
-    const float norm = static_cast<float>(std::sqrt(squared_norm));
+    const float norm = gradient_scale * static_cast<float>(std::sqrt(squared_norm));
     const float clip = options_.max_grad_norm > 0.0f && norm > options_.max_grad_norm
         ? options_.max_grad_norm / (norm + 1.0e-6f) : 1.0f;
     const float correction1 = 1.0f - std::pow(options_.beta1, static_cast<float>(step_));
@@ -58,7 +60,8 @@ void AdamW::step() {
         values.backend()->adamw_update(
             values.data(), grad_tensor->data(), state.first_moment.data(), state.second_moment.data(),
             values.numel(), options_.beta1, options_.beta2, correction1, correction2,
-            options_.learning_rate, options_.epsilon, options_.weight_decay, clip);
+            options_.learning_rate, options_.epsilon, options_.weight_decay,
+            gradient_scale * clip);
     }
 }
 

@@ -20,7 +20,7 @@ struct AdamWOptions {
 class AdamW {
 public:
     AdamW(std::vector<NamedParameter> parameters, AdamWOptions options = {});
-    void step();
+    void step(float gradient_scale = 1.0f);
     void zero_grad();
     void set_learning_rate(float learning_rate);
     float learning_rate() const noexcept { return options_.learning_rate; }
