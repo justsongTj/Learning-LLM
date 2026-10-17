@@ -1,0 +1,12 @@
+{"id":"knowledge_sky","category":"knowledge","instruction":"为什么天空是蓝色的?","expected_keywords":["瑞利散射","蓝光"]}
+{"id":"knowledge_solar_system","category":"knowledge","instruction":"什么是太阳系?","expected_keywords":["太阳","行星"]}
+{"id":"knowledge_great_wall","category":"knowledge","instruction":"中国长城最初修建的主要目的是什么?","expected_keywords":["防御"]}
+{"id":"definition_ai","category":"definition","instruction":"什么是人工智能?","expected_keywords":["计算机","智能"]}
+{"id":"definition_ml","category":"definition","instruction":"请解释机器学习。","expected_keywords":["数据","学习"]}
+{"id":"health_basics","category":"health","instruction":"请列出三种保持身体健康的方法。","expected_keywords":["运动","饮食","睡眠"]}
+{"id":"math_arithmetic","category":"math","instruction":"计算(10+5)×2+20÷4。","expected_keywords":["35"]}
+{"id":"translation_en","category":"translation","instruction":"将“我想预订明天晚上7点的餐厅”翻译成英语。","expected_keywords":["reservation","7"]}
+{"id":"summarize","category":"summarization","instruction":"用一句话概括:小明每天坚持跑步,半年后他的耐力和睡眠质量都有所改善。","expected_keywords":["跑步","改善"]}
+{"id":"format_three","category":"instruction_following","instruction":"仅列出三种常见的编程语言,使用逗号分隔。","expected_keywords":[","]}
+{"id":"insufficient_information","category":"uncertainty","instruction":"根据已知信息回答:小王买了一本书。这本书的作者是谁?","expected_keywords":["无法确定"]}
+{"id":"rewrite","category":"rewriting","instruction":"将“这个东西真的挺好的”改写为正式书面语。","expected_keywords":["优秀"]}

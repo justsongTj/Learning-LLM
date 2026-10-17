@@ -90,7 +90,7 @@ optimizer updates, so `N=8` processes eight times as many training tokens per st
 preserving checkpoint and learning-rate schedule semantics.
 
 For corpora prepared with `--instruction-format`, pass `--answer-only-loss` to exclude the
-`问题:`/`输入:` prefix from the loss of instruction paragraphs. Tokens after `回答:` through EOS
+`指令:`/`输入:` prefix from the loss of instruction paragraphs. Tokens after `回答:` through EOS
 remain supervised. Paragraphs without an answer marker, such as mixed-in encyclopedia text,
 retain ordinary next-token loss. Validation uses the same masking rule, so compare masked loss
 only with runs evaluated using this option.
@@ -197,6 +197,47 @@ python3 scripts/prepare_hf_corpus.py \
 
 Outputs are first written as `.part` files and renamed only after successful completion, so a
 network failure cannot leave an incomplete file under the requested final name.
+
+### Clean instruction data separately
+
+Do not mix encyclopedia paragraphs back into the answer-only fine-tuning stage. Convert an
+existing mixed corpus into a normalized instruction-only corpus with
+`scripts/prepare_instruction_corpus.py`. It accepts both `问题:... 回答:...` and arbitrary
+input forms ending in `回答:...`, and writes every accepted record as
+`指令:... 回答:...`. Plain text, empty/short answers, exact duplicates, overlong records,
+and answers that grossly miss an explicitly requested character count are excluded. Obvious
+factual errors cannot be identified reliably with a generic heuristic; put project-specific
+regular expressions in a review file and pass `--reject-pattern-file`.
+
+The fixed evaluation prompts are excluded by exact normalized prompt match to reduce leakage:
+
+```bash
+python3 scripts/prepare_instruction_corpus.py \
+  --input "$HOME/tujie/apps/datasets/corpus_zh_instruction_v2_train.txt" \
+  --input "$HOME/tujie/apps/datasets/corpus_zh_instruction_v2_validation.txt" \
+  --train-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_train.txt" \
+  --validation-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_validation.txt" \
+  --stats-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_stats.json" \
+  --evaluation-file data/instruction_eval_zh.jsonl
+```
+
+Keep encyclopedia text in a separate pretraining file. Review the JSON report and random
+samples before training; automatic rules deliberately do not claim to prove factual accuracy.
+Fine-tune with `--answer-only-loss` and use `指令:<task> 回答:` at generation time.
+
+Run the same small, version-controlled evaluation set for every checkpoint. Results are JSONL
+for later comparison; keyword pass is only a deterministic smoke metric, so factual accuracy,
+relevance, completeness, and instruction following still require review:
+
+```bash
+python3 scripts/run_instruction_eval.py \
+  --binary ./build/tinydl_generate \
+  --model "$HOME/tujie/apps/tinydl-artifacts/model-zh-answer-sft.tdl" \
+  --tokenizer "$HOME/tujie/apps/tinydl-artifacts/tokenizer_zh_8k_eos.model" \
+  --evaluation-file data/instruction_eval_zh.jsonl \
+  --output "$HOME/tujie/apps/tinydl-artifacts/model-zh-answer-sft.eval.jsonl" \
+  --device 4 --dcu
+```
 
 ```bash
 ./build/tinydl_train \

@@ -139,4 +139,11 @@ if(TINYDL_BUILD_TESTS)
     add_executable(tinydl_autograd_tests tests/test_autograd.cpp)
     target_link_libraries(tinydl_autograd_tests PRIVATE tinydl)
     add_test(NAME tinydl_autograd_tests COMMAND tinydl_autograd_tests)
+
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME tinydl_instruction_corpus_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_prepare_instruction_corpus.py)
+    endif()
 endif()

@@ -84,7 +84,7 @@ def main() -> int:
             output = str(row.get("output") or "").strip()
             if not instruction or not output:
                 return ""
-            parts = [f"问题:{instruction}"]
+            parts = [f"指令:{instruction}"]
             if input_text:
                 parts.append(f"输入:{input_text}")
             parts.append(f"回答:{output}")
