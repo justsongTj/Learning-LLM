@@ -8,14 +8,23 @@ import re
 import sys
 import unicodedata
 from collections import Counter
+from contextlib import ExitStack
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Pattern, Set, Tuple
 
 
 SPACE_RE = re.compile(r"[\t\r\f\v ]+")
-REQUESTED_LENGTH_RE = re.compile(r"(?:写|生成|撰写)[^\d]{0,24}(\d{2,5})\s*字")
+REQUESTED_LENGTH_RE = re.compile(
+    r"(?:写|生成|撰写|一篇|文章|短文|报告|新闻|长度|篇幅|至少|不少于)"
+    r"[^\d]{0,24}(\d{2,5})\s*个?字")
 LEADING_LABEL_RE = re.compile(r"^(?:问题|指令)\s*[:：]\s*")
 ANSWER_MARKER_RE = re.compile(r"回答\s*[:：]")
+EXPLICIT_TASK_RE = re.compile(
+    r"[?？]|(?:请|解释|描述|生成|写|翻译|总结|概括|改写|分析|计算|列出|"
+    r"给出|推荐|判断|选择|创建|制定|回答|说明|比较|提取|分类|纠正|检查|"
+    r"预测|什么|为什么|如何|怎么|哪些|谁|何时|何地)")
+COPY_NORMALIZE_RE = re.compile(r"[^0-9A-Za-z\u3400-\u4dbf\u4e00-\u9fff]+")
 TRAILING_INCOMPLETE = (",", "，", ":", "：", ";", "；")
 
 
@@ -56,6 +65,14 @@ def parse_instruction(line: str) -> Optional[Tuple[str, str]]:
     return prompt, answer
 
 
+def copy_similarity(prompt: str, answer: str) -> float:
+    prompt_key = COPY_NORMALIZE_RE.sub("", prompt).lower()
+    answer_key = COPY_NORMALIZE_RE.sub("", answer).lower()
+    if min(len(prompt_key), len(answer_key)) < 20:
+        return 0.0
+    return SequenceMatcher(None, prompt_key, answer_key, autojunk=False).ratio()
+
+
 def rejection_reason(prompt: str, answer: str, args, reject_patterns) -> Optional[str]:
     if len(prompt) < args.min_prompt_chars:
         return "empty_or_short_prompt"
@@ -65,14 +82,18 @@ def rejection_reason(prompt: str, answer: str, args, reject_patterns) -> Optiona
         return "too_long"
     if prompt == answer:
         return "copied_answer"
+    if copy_similarity(prompt, answer) >= args.max_copy_similarity:
+        return "near_copied_answer"
     requested = REQUESTED_LENGTH_RE.search(prompt)
     if requested and len(answer) < int(requested.group(1)) * args.requested_length_ratio:
         return "requested_length_not_met"
-    if args.reject_incomplete_ending and answer.endswith(TRAILING_INCOMPLETE):
-        return "incomplete_ending"
     combined = f"{prompt}\n{answer}"
     if any(pattern.search(combined) for pattern in reject_patterns):
         return "manual_reject_pattern"
+    if args.require_explicit_task and not EXPLICIT_TASK_RE.search(prompt):
+        return "ambiguous_prompt"
+    if args.reject_incomplete_ending and answer.endswith(TRAILING_INCOMPLETE):
+        return "incomplete_ending"
     return None
 
 
@@ -104,6 +125,8 @@ def main() -> int:
     parser.add_argument("--train-output", required=True)
     parser.add_argument("--validation-output", required=True)
     parser.add_argument("--stats-output", help="optional JSON cleaning report")
+    parser.add_argument("--rejected-output",
+                        help="optional JSONL audit file for rejected instruction records")
     parser.add_argument("--reject-pattern-file",
                         help="optional UTF-8 file containing one rejection regex per line")
     parser.add_argument("--evaluation-file",
@@ -114,6 +137,10 @@ def main() -> int:
     parser.add_argument("--max-chars", type=int, default=2000)
     parser.add_argument("--requested-length-ratio", type=float, default=0.5,
                         help="minimum answer/requested character ratio")
+    parser.add_argument("--max-copy-similarity", type=float, default=0.96,
+                        help="reject near-copies at or above this SequenceMatcher ratio")
+    parser.add_argument("--require-explicit-task", action="store_true",
+                        help="reject prompts without a question or recognized task verb")
     parser.add_argument("--reject-incomplete-ending", action="store_true",
                         help="reject answers ending in a comma, colon, or semicolon")
     parser.add_argument("--seed", type=int, default=42)
@@ -127,6 +154,8 @@ def main() -> int:
         parser.error("max-chars is too small")
     if not 0.0 <= args.requested_length_ratio <= 1.0:
         parser.error("requested-length-ratio must be between 0 and 1")
+    if not 0.0 < args.max_copy_similarity <= 1.0:
+        parser.error("max-copy-similarity must be between 0 and 1")
 
     train_path = Path(args.train_output)
     validation_path = Path(args.validation_output)
@@ -136,6 +165,11 @@ def main() -> int:
     validation_path.parent.mkdir(parents=True, exist_ok=True)
     train_part = train_path.with_name(train_path.name + ".part")
     validation_part = validation_path.with_name(validation_path.name + ".part")
+    rejected_path = Path(args.rejected_output) if args.rejected_output else None
+    rejected_part = (rejected_path.with_name(rejected_path.name + ".part")
+                     if rejected_path else None)
+    if rejected_path:
+        rejected_path.parent.mkdir(parents=True, exist_ok=True)
 
     reject_patterns = load_reject_patterns(args.reject_pattern_file)
     evaluation_prompts = load_evaluation_prompts(args.evaluation_file)
@@ -145,11 +179,17 @@ def main() -> int:
     train_count = validation_count = 0
 
     try:
-        with train_part.open("w", encoding="utf-8", newline="\n") as train_stream, \
-                validation_part.open("w", encoding="utf-8", newline="\n") as validation_stream:
+        with ExitStack() as stack:
+            train_stream = stack.enter_context(
+                train_part.open("w", encoding="utf-8", newline="\n"))
+            validation_stream = stack.enter_context(
+                validation_part.open("w", encoding="utf-8", newline="\n"))
+            rejected_stream = (stack.enter_context(
+                rejected_part.open("w", encoding="utf-8", newline="\n"))
+                if rejected_part else None)
             for filename in args.input:
                 with Path(filename).open("r", encoding="utf-8") as source:
-                    for raw in source:
+                    for line_number, raw in enumerate(source, 1):
                         reasons["input_lines"] += 1
                         parsed = parse_instruction(raw)
                         if parsed is None:
@@ -159,15 +199,39 @@ def main() -> int:
                         reason = rejection_reason(prompt, answer, args, reject_patterns)
                         if reason:
                             reasons[reason] += 1
+                            if rejected_stream:
+                                rejected_stream.write(json.dumps({
+                                    "reason": reason,
+                                    "source": filename,
+                                    "line": line_number,
+                                    "prompt": prompt,
+                                    "answer": answer,
+                                }, ensure_ascii=False) + "\n")
                             continue
                         normalized = f"指令:{prompt} 回答:{answer}"
                         fingerprint = hashlib.sha256(normalized.encode("utf-8")).digest()
                         if fingerprint in seen:
                             reasons["exact_duplicate"] += 1
+                            if rejected_stream:
+                                rejected_stream.write(json.dumps({
+                                    "reason": "exact_duplicate",
+                                    "source": filename,
+                                    "line": line_number,
+                                    "prompt": prompt,
+                                    "answer": answer,
+                                }, ensure_ascii=False) + "\n")
                             continue
                         seen.add(fingerprint)
                         if normalize(prompt) in evaluation_prompts:
                             reasons["evaluation_prompt_excluded"] += 1
+                            if rejected_stream:
+                                rejected_stream.write(json.dumps({
+                                    "reason": "evaluation_prompt_excluded",
+                                    "source": filename,
+                                    "line": line_number,
+                                    "prompt": prompt,
+                                    "answer": answer,
+                                }, ensure_ascii=False) + "\n")
                             continue
                         if stable_bucket(normalized, args.seed) < cutoff:
                             validation_stream.write(normalized + "\n")
@@ -180,9 +244,13 @@ def main() -> int:
             raise RuntimeError("cleaning produced an empty train or validation file")
         train_part.replace(train_path)
         validation_part.replace(validation_path)
+        if rejected_part and rejected_path:
+            rejected_part.replace(rejected_path)
     except Exception:
         train_part.unlink(missing_ok=True)
         validation_part.unlink(missing_ok=True)
+        if rejected_part:
+            rejected_part.unlink(missing_ok=True)
         raise
 
     report = {
@@ -196,6 +264,8 @@ def main() -> int:
             "min_answer_chars": args.min_answer_chars,
             "max_chars": args.max_chars,
             "requested_length_ratio": args.requested_length_ratio,
+            "max_copy_similarity": args.max_copy_similarity,
+            "require_explicit_task": args.require_explicit_task,
             "reject_incomplete_ending": args.reject_incomplete_ending,
             "seed": args.seed,
         },

@@ -218,11 +218,20 @@ python3 scripts/prepare_instruction_corpus.py \
   --train-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_train.txt" \
   --validation-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_validation.txt" \
   --stats-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_clean_stats.json" \
-  --evaluation-file data/instruction_eval_zh.jsonl
+  --rejected-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_rejected.jsonl" \
+  --reject-pattern-file "$HOME/tujie/apps/datasets/instruction_reject_patterns.txt" \
+  --evaluation-file data/instruction_eval_zh.jsonl \
+  --reject-incomplete-ending \
+  --require-explicit-task
 ```
 
 Keep encyclopedia text in a separate pretraining file. Review the JSON report and random
 samples before training; automatic rules deliberately do not claim to prove factual accuracy.
+`--require-explicit-task` is intentionally conservative: it removes bare labels such as
+`北京` whose desired operation cannot be inferred reliably. Rejected instruction records and their
+reasons are written to the optional JSONL audit file. Near-identical prompt/answer pairs are
+filtered using `--max-copy-similarity` (default 0.96), while the expanded requested-length
+check recognizes forms such as `写500字`, `一篇5000字`, and `篇幅不少于300字`.
 Fine-tune with `--answer-only-loss` and use `指令:<task> 回答:` at generation time.
 
 Run the same small, version-controlled evaluation set for every checkpoint. Results are JSONL
