@@ -251,78 +251,26 @@ Variable causal_self_attention(const Variable& q, const Variable& k, const Varia
     }
     const std::size_t tokens = q.value().shape()[0];
     const std::size_t channels = q.value().shape()[1];
-    const std::size_t head_dim = channels / static_cast<std::size_t>(num_heads);
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    const auto qv = q.value().to_vector();
-    const auto kv = k.value().to_vector();
-    const auto vv = v.value().to_vector();
-    std::vector<float> probabilities(static_cast<std::size_t>(num_heads) * tokens * tokens, 0.0f);
-    std::vector<float> output_values(tokens * channels, 0.0f);
-    for (int head = 0; head < num_heads; ++head) {
-        const std::size_t head_offset = static_cast<std::size_t>(head) * head_dim;
-        for (std::size_t query = 0; query < tokens; ++query) {
-            float maximum = -INFINITY;
-            for (std::size_t key = 0; key <= query; ++key) {
-                float score = 0.0f;
-                for (std::size_t d = 0; d < head_dim; ++d)
-                    score += qv[query * channels + head_offset + d] *
-                             kv[key * channels + head_offset + d];
-                score *= scale;
-                probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key] = score;
-                maximum = std::max(maximum, score);
-            }
-            float denominator = 0.0f;
-            for (std::size_t key = 0; key <= query; ++key) {
-                float& probability = probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key];
-                probability = std::exp(probability - maximum);
-                denominator += probability;
-            }
-            for (std::size_t key = 0; key <= query; ++key) {
-                const float probability = probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key] / denominator;
-                probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key] = probability;
-                for (std::size_t d = 0; d < head_dim; ++d)
-                    output_values[query * channels + head_offset + d] +=
-                        probability * vv[key * channels + head_offset + d];
-            }
-        }
-    }
-    Tensor output = tensor_from(q.value().shape(), q.value().backend(), output_values);
+    Tensor probabilities({static_cast<std::size_t>(num_heads), tokens, tokens},
+                         q.value().backend());
+    Tensor output(q.value().shape(), q.value().backend());
+    q.value().backend()->causal_attention_forward(
+        q.value().data(), k.value().data(), v.value().data(),
+        probabilities.data(), output.data(), static_cast<int>(tokens),
+        static_cast<int>(channels), num_heads);
     const bool track = q.requires_grad() || k.requires_grad() || v.requires_grad();
     return Variable::from_graph(std::move(output), track, {q, k, v},
-        [q, k, v, num_heads, tokens, channels, head_dim, scale, probabilities](const Tensor& grad) {
-            const auto qv = q.value().to_vector();
-            const auto kv = k.value().to_vector();
-            const auto vv = v.value().to_vector();
-            const auto go = grad.to_vector();
-            std::vector<float> dq(tokens * channels, 0.0f), dk(tokens * channels, 0.0f),
-                               dv(tokens * channels, 0.0f);
-            for (int head = 0; head < num_heads; ++head) {
-                const std::size_t head_offset = static_cast<std::size_t>(head) * head_dim;
-                for (std::size_t query = 0; query < tokens; ++query) {
-                    std::vector<float> dp(query + 1, 0.0f);
-                    float softmax_dot = 0.0f;
-                    for (std::size_t key = 0; key <= query; ++key) {
-                        const float p = probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key];
-                        for (std::size_t d = 0; d < head_dim; ++d) {
-                            const float upstream = go[query * channels + head_offset + d];
-                            dp[key] += upstream * vv[key * channels + head_offset + d];
-                            dv[key * channels + head_offset + d] += p * upstream;
-                        }
-                        softmax_dot += p * dp[key];
-                    }
-                    for (std::size_t key = 0; key <= query; ++key) {
-                        const float p = probabilities[(static_cast<std::size_t>(head) * tokens + query) * tokens + key];
-                        const float ds = p * (dp[key] - softmax_dot) * scale;
-                        for (std::size_t d = 0; d < head_dim; ++d) {
-                            dq[query * channels + head_offset + d] += ds * kv[key * channels + head_offset + d];
-                            dk[key * channels + head_offset + d] += ds * qv[query * channels + head_offset + d];
-                        }
-                    }
-                }
-            }
-            if (q.requires_grad()) q.accumulate_grad(tensor_from(q.value().shape(), q.value().backend(), dq));
-            if (k.requires_grad()) k.accumulate_grad(tensor_from(k.value().shape(), k.value().backend(), dk));
-            if (v.requires_grad()) v.accumulate_grad(tensor_from(v.value().shape(), v.value().backend(), dv));
+        [q, k, v, num_heads, tokens, channels, probabilities](const Tensor& grad) {
+            Tensor dq(q.value().shape(), q.value().backend());
+            Tensor dk(k.value().shape(), k.value().backend());
+            Tensor dv(v.value().shape(), v.value().backend());
+            q.value().backend()->causal_attention_backward(
+                q.value().data(), k.value().data(), v.value().data(), probabilities.data(),
+                grad.data(), dq.data(), dk.data(), dv.data(), static_cast<int>(tokens),
+                static_cast<int>(channels), num_heads);
+            if (q.requires_grad()) q.accumulate_grad(dq);
+            if (k.requires_grad()) k.accumulate_grad(dk);
+            if (v.requires_grad()) v.accumulate_grad(dv);
         });
 }
 

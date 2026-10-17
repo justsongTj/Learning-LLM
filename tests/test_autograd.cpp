@@ -61,6 +61,61 @@ int main() {
         if (!rejected_empty_mask)
             throw std::runtime_error("cross entropy accepted an empty loss mask");
 
+        tinydl::Tensor attention_q({3, 4}, cpu);
+        tinydl::Tensor attention_k({3, 4}, cpu);
+        tinydl::Tensor attention_v({3, 4}, cpu);
+        tinydl::Tensor attention_probabilities({2, 3, 3}, cpu);
+        tinydl::Tensor attention_output({3, 4}, cpu);
+        tinydl::Tensor attention_upstream({3, 4}, cpu);
+        tinydl::Tensor attention_dq({3, 4}, cpu);
+        tinydl::Tensor attention_dk({3, 4}, cpu);
+        tinydl::Tensor attention_dv({3, 4}, cpu);
+        attention_q.copy_from({0.2f, -0.1f, 0.4f, 0.3f,
+                               0.5f, 0.2f, -0.3f, 0.1f,
+                               -0.4f, 0.6f, 0.2f, -0.5f});
+        attention_k.copy_from({0.1f, 0.7f, -0.2f, 0.5f,
+                               0.3f, -0.4f, 0.6f, 0.2f,
+                               0.8f, 0.1f, -0.1f, 0.9f});
+        attention_v.copy_from({1.0f, 2.0f, 3.0f, 4.0f,
+                               -1.0f, 0.5f, 2.0f, -2.0f,
+                               0.25f, -0.75f, 1.5f, 0.8f});
+        attention_upstream.copy_from({0.3f, -0.2f, 0.1f, 0.4f,
+                                      -0.5f, 0.7f, -0.3f, 0.2f,
+                                      0.6f, 0.1f, -0.4f, 0.8f});
+        cpu->causal_attention_forward(
+            attention_q.data(), attention_k.data(), attention_v.data(),
+            attention_probabilities.data(), attention_output.data(), 3, 4, 2);
+        expect_close(attention_probabilities.to_vector(),
+                     {1.0f, 0.0f, 0.0f, 0.52120048f, 0.47879952f, 0.0f,
+                      0.44871391f, 0.26590165f, 0.28538444f,
+                      1.0f, 0.0f, 0.0f, 0.54758526f, 0.45241474f, 0.0f,
+                      0.31994145f, 0.39835402f, 0.28170454f},
+                     1.0e-5f, "causal attention probabilities");
+        expect_close(attention_output.to_vector(),
+                     {1.0f, 2.0f, 3.0f, 4.0f,
+                      0.04240097f, 1.28180073f, 2.54758526f, 1.28551153f,
+                      0.25415837f, 0.81634032f, 2.17908918f, 0.70842138f},
+                     1.0e-5f, "causal attention output");
+        cpu->causal_attention_backward(
+            attention_q.data(), attention_k.data(), attention_v.data(),
+            attention_probabilities.data(), attention_upstream.data(),
+            attention_dq.data(), attention_dk.data(), attention_dv.data(), 3, 4, 2);
+        expect_close(attention_dq.to_vector(),
+                     {0.0f, 0.0f, 0.0f, 0.0f,
+                      -0.00176459f, 0.00970524f, -0.12612640f, 0.04729740f,
+                      -0.05196479f, 0.18144297f, -0.46524636f, 0.20452457f},
+                     1.0e-5f, "causal attention q gradient");
+        expect_close(attention_dk.to_vector(),
+                     {-0.06740630f, 0.10949125f, 0.05699132f, -0.24495599f,
+                      0.05456158f, -0.09022416f, -0.07073174f, 0.27930706f,
+                      0.01284472f, -0.01926709f, 0.01374043f, -0.03435107f},
+                     1.0e-5f, "causal attention k gradient");
+        expect_close(attention_dv.to_vector(),
+                     {0.30862811f, 0.20971173f, -0.19225216f, 0.76547021f,
+                      -0.07985877f, 0.36174983f, -0.29506603f, 0.40916616f,
+                      0.17123066f, 0.02853844f, -0.11268181f, 0.22536363f},
+                     1.0e-5f, "causal attention v gradient");
+
         tinydl::Tensor parameter_tensor({2}, cpu);
         tinydl::Tensor gradient_tensor({2}, cpu);
         parameter_tensor.copy_from({1.0f, 2.0f});

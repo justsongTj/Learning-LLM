@@ -121,6 +121,86 @@ public:
         }
     }
 
+    void causal_attention_forward(const float* q, const float* k, const float* v,
+                                  float* probabilities, float* out,
+                                  int tokens, int channels, int heads) override {
+        const int head_dim = channels / heads;
+        const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+        std::fill(probabilities,
+                  probabilities + static_cast<std::size_t>(heads) * tokens * tokens, 0.0f);
+        std::fill(out, out + static_cast<std::size_t>(tokens) * channels, 0.0f);
+        for (int head = 0; head < heads; ++head) {
+            const int head_offset = head * head_dim;
+            for (int query = 0; query < tokens; ++query) {
+                float maximum = -INFINITY;
+                for (int key = 0; key <= query; ++key) {
+                    float score = 0.0f;
+                    for (int d = 0; d < head_dim; ++d)
+                        score += q[query * channels + head_offset + d] *
+                                 k[key * channels + head_offset + d];
+                    score *= scale;
+                    probabilities[(head * tokens + query) * tokens + key] = score;
+                    maximum = std::max(maximum, score);
+                }
+                float denominator = 0.0f;
+                for (int key = 0; key <= query; ++key) {
+                    float& probability = probabilities[(head * tokens + query) * tokens + key];
+                    probability = std::exp(probability - maximum);
+                    denominator += probability;
+                }
+                for (int key = 0; key <= query; ++key) {
+                    const float probability =
+                        probabilities[(head * tokens + query) * tokens + key] / denominator;
+                    probabilities[(head * tokens + query) * tokens + key] = probability;
+                    for (int d = 0; d < head_dim; ++d)
+                        out[query * channels + head_offset + d] +=
+                            probability * v[key * channels + head_offset + d];
+                }
+            }
+        }
+    }
+
+    void causal_attention_backward(const float* q, const float* k, const float* v,
+                                   const float* probabilities, const float* grad,
+                                   float* dq, float* dk, float* dv,
+                                   int tokens, int channels, int heads) override {
+        const int head_dim = channels / heads;
+        const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+        const std::size_t elements = static_cast<std::size_t>(tokens) * channels;
+        std::fill(dq, dq + elements, 0.0f);
+        std::fill(dk, dk + elements, 0.0f);
+        std::fill(dv, dv + elements, 0.0f);
+        for (int head = 0; head < heads; ++head) {
+            const int head_offset = head * head_dim;
+            for (int query = 0; query < tokens; ++query) {
+                float softmax_dot = 0.0f;
+                for (int key = 0; key <= query; ++key) {
+                    float dp = 0.0f;
+                    for (int d = 0; d < head_dim; ++d)
+                        dp += grad[query * channels + head_offset + d] *
+                              v[key * channels + head_offset + d];
+                    softmax_dot += probabilities[(head * tokens + query) * tokens + key] * dp;
+                }
+                for (int key = 0; key <= query; ++key) {
+                    float dp = 0.0f;
+                    for (int d = 0; d < head_dim; ++d)
+                        dp += grad[query * channels + head_offset + d] *
+                              v[key * channels + head_offset + d];
+                    const float probability =
+                        probabilities[(head * tokens + query) * tokens + key];
+                    const float ds = probability * (dp - softmax_dot) * scale;
+                    for (int d = 0; d < head_dim; ++d) {
+                        const int query_index = query * channels + head_offset + d;
+                        const int key_index = key * channels + head_offset + d;
+                        dq[query_index] += ds * k[key_index];
+                        dk[key_index] += ds * q[query_index];
+                        dv[key_index] += probability * grad[query_index];
+                    }
+                }
+            }
+        }
+    }
+
 
     float squared_l2_norm(const float* x, std::size_t n) override {
         double sum = 0.0;

@@ -31,6 +31,13 @@ public:
     virtual void softmax_rows(const float* x, float* out, int rows, int cols) = 0;
     virtual void layer_norm(const float* x, const float* weight, const float* bias,
                             float* out, int rows, int cols, float eps) = 0;
+    virtual void causal_attention_forward(const float* q, const float* k, const float* v,
+                                          float* probabilities, float* out,
+                                          int tokens, int channels, int heads) = 0;
+    virtual void causal_attention_backward(const float* q, const float* k, const float* v,
+                                           const float* probabilities, const float* grad,
+                                           float* dq, float* dk, float* dv,
+                                           int tokens, int channels, int heads) = 0;
     virtual float squared_l2_norm(const float* x, std::size_t n) = 0;
     virtual void adamw_update(float* values, const float* gradients,
                               float* first_moment, float* second_moment, std::size_t n,

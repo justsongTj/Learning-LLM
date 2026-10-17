@@ -174,6 +174,80 @@ __global__ void layer_norm_kernel(const float* x, const float* weight, const flo
     }
 }
 
+__global__ void causal_attention_forward_kernel(const float* q, const float* k, const float* v,
+                                                float* probabilities, float* out,
+                                                int tokens, int channels, int heads) {
+    const int item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= heads * tokens) return;
+    const int head = item / tokens;
+    const int query = item % tokens;
+    const int head_dim = channels / heads;
+    const int head_offset = head * head_dim;
+    const float scale = rsqrtf(static_cast<float>(head_dim));
+    float maximum = -INFINITY;
+    for (int key = 0; key <= query; ++key) {
+        float score = 0.0f;
+        for (int d = 0; d < head_dim; ++d)
+            score += q[query * channels + head_offset + d] *
+                     k[key * channels + head_offset + d];
+        score *= scale;
+        probabilities[(head * tokens + query) * tokens + key] = score;
+        maximum = fmaxf(maximum, score);
+    }
+    float denominator = 0.0f;
+    for (int key = 0; key <= query; ++key) {
+        float& probability = probabilities[(head * tokens + query) * tokens + key];
+        probability = expf(probability - maximum);
+        denominator += probability;
+    }
+    for (int key = 0; key <= query; ++key)
+        probabilities[(head * tokens + query) * tokens + key] /= denominator;
+    for (int d = 0; d < head_dim; ++d) {
+        float value = 0.0f;
+        for (int key = 0; key <= query; ++key) {
+            const float probability = probabilities[(head * tokens + query) * tokens + key];
+            value += probability * v[key * channels + head_offset + d];
+        }
+        out[query * channels + head_offset + d] = value;
+    }
+}
+
+__global__ void causal_attention_backward_kernel(
+    const float* q, const float* k, const float* v, const float* probabilities,
+    const float* grad, float* dq, float* dk, float* dv,
+    int tokens, int channels, int heads) {
+    const int item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= heads * tokens) return;
+    const int head = item / tokens;
+    const int query = item % tokens;
+    const int head_dim = channels / heads;
+    const int head_offset = head * head_dim;
+    const float scale = rsqrtf(static_cast<float>(head_dim));
+    float softmax_dot = 0.0f;
+    for (int key = 0; key <= query; ++key) {
+        float dp = 0.0f;
+        for (int d = 0; d < head_dim; ++d)
+            dp += grad[query * channels + head_offset + d] *
+                  v[key * channels + head_offset + d];
+        softmax_dot += probabilities[(head * tokens + query) * tokens + key] * dp;
+    }
+    for (int key = 0; key <= query; ++key) {
+        float dp = 0.0f;
+        for (int d = 0; d < head_dim; ++d)
+            dp += grad[query * channels + head_offset + d] *
+                  v[key * channels + head_offset + d];
+        const float probability = probabilities[(head * tokens + query) * tokens + key];
+        const float ds = probability * (dp - softmax_dot) * scale;
+        for (int d = 0; d < head_dim; ++d) {
+            const int query_index = query * channels + head_offset + d;
+            const int key_index = key * channels + head_offset + d;
+            dq[query_index] += ds * k[key_index];
+            atomicAdd(dk + key_index, ds * q[query_index]);
+            atomicAdd(dv + key_index, probability * grad[query_index]);
+        }
+    }
+}
+
 class DcuBackend final : public Backend {
 public:
     explicit DcuBackend(int device_index) : device_index_(device_index) {
@@ -303,6 +377,36 @@ public:
         hipLaunchKernelGGL(layer_norm_kernel, dim3(rows), dim3(1), 0, stream_,
                            x, weight, bias, out, cols, eps);
         check_hip(hipGetLastError(), "layer_norm_kernel");
+    }
+
+    void causal_attention_forward(const float* q, const float* k, const float* v,
+                                  float* probabilities, float* out,
+                                  int tokens, int channels, int heads) override {
+        activate();
+        constexpr unsigned threads = 128;
+        const unsigned count = static_cast<unsigned>(heads * tokens);
+        const unsigned blocks = (count + threads - 1) / threads;
+        hipLaunchKernelGGL(causal_attention_forward_kernel, dim3(blocks), dim3(threads), 0,
+                           stream_, q, k, v, probabilities, out, tokens, channels, heads);
+        check_hip(hipGetLastError(), "causal_attention_forward_kernel");
+    }
+
+    void causal_attention_backward(const float* q, const float* k, const float* v,
+                                   const float* probabilities, const float* grad,
+                                   float* dq, float* dk, float* dv,
+                                   int tokens, int channels, int heads) override {
+        activate();
+        const std::size_t elements = static_cast<std::size_t>(tokens) * channels;
+        fill(dq, 0.0f, elements);
+        fill(dk, 0.0f, elements);
+        fill(dv, 0.0f, elements);
+        constexpr unsigned threads = 128;
+        const unsigned count = static_cast<unsigned>(heads * tokens);
+        const unsigned blocks = (count + threads - 1) / threads;
+        hipLaunchKernelGGL(causal_attention_backward_kernel, dim3(blocks), dim3(threads), 0,
+                           stream_, q, k, v, probabilities, grad, dq, dk, dv,
+                           tokens, channels, heads);
+        check_hip(hipGetLastError(), "causal_attention_backward_kernel");
     }
 
     float squared_l2_norm(const float* x, std::size_t n) override {
