@@ -177,37 +177,62 @@ __global__ void layer_norm_kernel(const float* x, const float* weight, const flo
 __global__ void causal_attention_forward_kernel(const float* q, const float* k, const float* v,
                                                 float* probabilities, float* out,
                                                 int tokens, int channels, int heads) {
-    const int item = blockIdx.x * blockDim.x + threadIdx.x;
-    if (item >= heads * tokens) return;
+    extern __shared__ float partial[];
+    const int item = blockIdx.x;
+    const int lane = threadIdx.x;
     const int head = item / tokens;
     const int query = item % tokens;
     const int head_dim = channels / heads;
     const int head_offset = head * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
-    float maximum = -INFINITY;
+    float* row = probabilities + (head * tokens + query) * tokens;
+
     for (int key = 0; key <= query; ++key) {
         float score = 0.0f;
-        for (int d = 0; d < head_dim; ++d)
+        for (int d = lane; d < head_dim; d += blockDim.x)
             score += q[query * channels + head_offset + d] *
                      k[key * channels + head_offset + d];
-        score *= scale;
-        probabilities[(head * tokens + query) * tokens + key] = score;
-        maximum = fmaxf(maximum, score);
-    }
-    float denominator = 0.0f;
-    for (int key = 0; key <= query; ++key) {
-        float& probability = probabilities[(head * tokens + query) * tokens + key];
-        probability = expf(probability - maximum);
-        denominator += probability;
-    }
-    for (int key = 0; key <= query; ++key)
-        probabilities[(head * tokens + query) * tokens + key] /= denominator;
-    for (int d = 0; d < head_dim; ++d) {
-        float value = 0.0f;
-        for (int key = 0; key <= query; ++key) {
-            const float probability = probabilities[(head * tokens + query) * tokens + key];
-            value += probability * v[key * channels + head_offset + d];
+        partial[lane] = score;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (lane < stride) partial[lane] += partial[lane + stride];
+            __syncthreads();
         }
+        if (lane == 0) row[key] = partial[0] * scale;
+        __syncthreads();
+    }
+
+    float maximum = -INFINITY;
+    for (int key = lane; key <= query; key += blockDim.x)
+        maximum = fmaxf(maximum, row[key]);
+    partial[lane] = maximum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (lane < stride) partial[lane] = fmaxf(partial[lane], partial[lane + stride]);
+        __syncthreads();
+    }
+    maximum = partial[0];
+
+    float denominator = 0.0f;
+    for (int key = lane; key <= query; key += blockDim.x) {
+        row[key] = expf(row[key] - maximum);
+        denominator += row[key];
+    }
+    partial[lane] = denominator;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (lane < stride) partial[lane] += partial[lane + stride];
+        __syncthreads();
+    }
+    denominator = partial[0];
+    for (int key = lane; key < tokens; key += blockDim.x)
+        row[key] = key <= query ? row[key] / denominator : 0.0f;
+    __syncthreads();
+
+    for (int d = lane; d < head_dim; d += blockDim.x) {
+        float value = 0.0f;
+        for (int key = 0; key <= query; ++key)
+            value += row[key] * v[key * channels + head_offset + d];
         out[query * channels + head_offset + d] = value;
     }
 }
@@ -216,35 +241,57 @@ __global__ void causal_attention_backward_kernel(
     const float* q, const float* k, const float* v, const float* probabilities,
     const float* grad, float* dq, float* dk, float* dv,
     int tokens, int channels, int heads) {
-    const int item = blockIdx.x * blockDim.x + threadIdx.x;
-    if (item >= heads * tokens) return;
+    extern __shared__ float shared[];
+    const int item = blockIdx.x;
+    const int lane = threadIdx.x;
     const int head = item / tokens;
     const int query = item % tokens;
     const int head_dim = channels / heads;
     const int head_offset = head * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
-    float softmax_dot = 0.0f;
+    float* partial = shared;
+    float* dp_values = shared + blockDim.x;
+    const float* row = probabilities + (head * tokens + query) * tokens;
+
     for (int key = 0; key <= query; ++key) {
         float dp = 0.0f;
-        for (int d = 0; d < head_dim; ++d)
+        for (int d = lane; d < head_dim; d += blockDim.x)
             dp += grad[query * channels + head_offset + d] *
                   v[key * channels + head_offset + d];
-        softmax_dot += probabilities[(head * tokens + query) * tokens + key] * dp;
-    }
-    for (int key = 0; key <= query; ++key) {
-        float dp = 0.0f;
-        for (int d = 0; d < head_dim; ++d)
-            dp += grad[query * channels + head_offset + d] *
-                  v[key * channels + head_offset + d];
-        const float probability = probabilities[(head * tokens + query) * tokens + key];
-        const float ds = probability * (dp - softmax_dot) * scale;
-        for (int d = 0; d < head_dim; ++d) {
-            const int query_index = query * channels + head_offset + d;
-            const int key_index = key * channels + head_offset + d;
-            dq[query_index] += ds * k[key_index];
-            atomicAdd(dk + key_index, ds * q[query_index]);
-            atomicAdd(dv + key_index, probability * grad[query_index]);
+        partial[lane] = dp;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+            if (lane < stride) partial[lane] += partial[lane + stride];
+            __syncthreads();
         }
+        if (lane == 0) dp_values[key] = partial[0];
+        __syncthreads();
+    }
+
+    float softmax_dot = 0.0f;
+    for (int key = lane; key <= query; key += blockDim.x)
+        softmax_dot += row[key] * dp_values[key];
+    partial[lane] = softmax_dot;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (lane < stride) partial[lane] += partial[lane + stride];
+        __syncthreads();
+    }
+    softmax_dot = partial[0];
+    for (int key = lane; key <= query; key += blockDim.x)
+        dp_values[key] = row[key] * (dp_values[key] - softmax_dot) * scale;
+    __syncthreads();
+
+    for (int d = lane; d < head_dim; d += blockDim.x) {
+        const int query_index = query * channels + head_offset + d;
+        float dq_value = 0.0f;
+        for (int key = 0; key <= query; ++key) {
+            const int key_index = key * channels + head_offset + d;
+            dq_value += dp_values[key] * k[key_index];
+            atomicAdd(dk + key_index, dp_values[key] * q[query_index]);
+            atomicAdd(dv + key_index, row[key] * grad[query_index]);
+        }
+        dq[query_index] = dq_value;
     }
 }
 
@@ -383,10 +430,11 @@ public:
                                   float* probabilities, float* out,
                                   int tokens, int channels, int heads) override {
         activate();
-        constexpr unsigned threads = 128;
-        const unsigned count = static_cast<unsigned>(heads * tokens);
-        const unsigned blocks = (count + threads - 1) / threads;
-        hipLaunchKernelGGL(causal_attention_forward_kernel, dim3(blocks), dim3(threads), 0,
+        constexpr unsigned threads = 64;
+        const unsigned blocks = static_cast<unsigned>(heads * tokens);
+        const std::size_t shared_bytes = threads * sizeof(float);
+        hipLaunchKernelGGL(causal_attention_forward_kernel, dim3(blocks), dim3(threads),
+                           shared_bytes,
                            stream_, q, k, v, probabilities, out, tokens, channels, heads);
         check_hip(hipGetLastError(), "causal_attention_forward_kernel");
     }
@@ -397,13 +445,14 @@ public:
                                    int tokens, int channels, int heads) override {
         activate();
         const std::size_t elements = static_cast<std::size_t>(tokens) * channels;
-        fill(dq, 0.0f, elements);
         fill(dk, 0.0f, elements);
         fill(dv, 0.0f, elements);
-        constexpr unsigned threads = 128;
-        const unsigned count = static_cast<unsigned>(heads * tokens);
-        const unsigned blocks = (count + threads - 1) / threads;
-        hipLaunchKernelGGL(causal_attention_backward_kernel, dim3(blocks), dim3(threads), 0,
+        constexpr unsigned threads = 64;
+        const unsigned blocks = static_cast<unsigned>(heads * tokens);
+        const std::size_t shared_bytes =
+            (threads + static_cast<std::size_t>(tokens)) * sizeof(float);
+        hipLaunchKernelGGL(causal_attention_backward_kernel, dim3(blocks), dim3(threads),
+                           shared_bytes,
                            stream_, q, k, v, probabilities, grad, dq, dk, dv,
                            tokens, channels, heads);
         check_hip(hipGetLastError(), "causal_attention_backward_kernel");
