@@ -40,6 +40,45 @@ Alpha Beta Gamma Delta Echo Foxtrot Hotel India Kilo Lima Mike November Oscar Qu
 白云 青山 碧水 绿洲 石桥 古塔 庭院 长廊 书店 剧院 车站 港口 工厂 农场 校园 公园
 """.split())
 
+COMPOSITIONAL_PREFIXES = ("节点", "模块", "对象", "单元", "批次", "样本", "记录", "任务")
+COMPOSITIONAL_MARKERS = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ甲乙丙丁戊己庚辛壬癸")
+COMPOSITIONAL_EVAL_ITEMS = frozenset("""
+节点A0172 模块B3814 对象C9056 单元D2478 批次E6301 样本F4925
+记录G1083 任务H7546 节点J2690 模块K8137 对象L5462 单元M3908
+批次N1274 样本P6803 记录Q4521 任务R9365 节点S3047 模块T8712
+对象U5196 单元V0438 批次W7650 样本X2189 记录Y6943 任务Z3527
+节点甲8406 模块乙1759 对象丙6234 单元丁9071 批次戊4682 样本己2315
+记录庚7864 任务辛0549 \u8282\u70b9壬6128 模块癸3490 对象A8753 单元B2064
+批次C7319 \u6837\u672cD5840 记录E1926 任务F4675 \u8282\u70b9G8204 模块H3157
+对象J6481 单元K0793 \u6279\u6b21L5268 \u6837\u672cM9034 记录N2471 任务P6859
+节点Q1306 模块R7924 对象S4580 单元T0165 \u6279\u6b21U8437 \u6837\u672cV2791
+记录W6048 任务X3512 \u8282\u70b9Y9286 模块Z4750 对象甲1639 单元乙8074
+""".split())
+
+
+def generate_compositional_candidates(randomizer):
+    candidates = []
+    seen = set()
+    while len(candidates) < 6:
+        item = (f"{randomizer.choice(COMPOSITIONAL_PREFIXES)}"
+                f"{randomizer.choice(COMPOSITIONAL_MARKERS)}"
+                f"{randomizer.randrange(10_000):04d}")
+        if item not in seen and item not in COMPOSITIONAL_EVAL_ITEMS:
+            seen.add(item)
+            candidates.append(item)
+    return candidates
+
+
+def make_open_copy_prompt(candidates, item_count: int, randomizer):
+    joined = "、".join(candidates)
+    chinese_count = {2: "两", 3: "三", 4: "四"}[item_count]
+    return randomizer.choice((
+        f"候选项依次为：{joined}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
+        f"从列表{joined}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
+        f"以下项目按顺序排列：{joined}。输出前{item_count}项，各项之间使用英文逗号。",
+        f"给定清单：{joined}。保留最前面的{chinese_count}项，只输出用英文逗号连接的结果。",
+    ))
+
 
 def stable_rank(text: str, seed: int) -> bytes:
     return hashlib.sha256(f"{seed}\0{text}".encode("utf-8")).digest()
@@ -137,18 +176,21 @@ def generate_format(count: int, seed: int, excluded_prompts=None,
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
         candidates = randomizer.sample(pools[category], len(pools[category]))
-        if curriculum in ("copy2", "copy_count", "copy_count_open"):
+        if curriculum in ("copy2", "copy_count", "copy_count_open",
+                          "copy_count_compositional"):
             item_count = 2 if curriculum == "copy2" else randomizer.choice((2, 3, 4))
             chinese_count = {2: "两", 3: "三", 4: "四"}[item_count]
-            if curriculum == "copy_count_open" and randomizer.randrange(5) != 0:
+            compositional_roll = (randomizer.randrange(5)
+                                  if curriculum == "copy_count_compositional"
+                                  else None)
+            if curriculum == "copy_count_compositional" and compositional_roll < 3:
+                candidates = generate_compositional_candidates(randomizer)
+                prompt = make_open_copy_prompt(candidates, item_count, randomizer)
+            elif ((curriculum == "copy_count_open" and randomizer.randrange(5) != 0)
+                  or (curriculum == "copy_count_compositional"
+                      and compositional_roll == 3)):
                 candidates = randomizer.sample(OPEN_COPY_TRAIN_ITEMS, 6)
-                joined = "、".join(candidates)
-                prompt = randomizer.choice((
-                    f"候选项依次为：{joined}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
-                    f"从列表{joined}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
-                    f"以下项目按顺序排列：{joined}。输出前{item_count}项，各项之间使用英文逗号。",
-                    f"给定清单：{joined}。保留最前面的{chinese_count}项，只输出用英文逗号连接的结果。",
-                ))
+                prompt = make_open_copy_prompt(candidates, item_count, randomizer)
             else:
                 prompt = randomizer.choice((
                     f"候选{category}依次为：{'、'.join(candidates)}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
@@ -277,7 +319,7 @@ def main() -> int:
     parser.add_argument("--format-count", type=int, default=500)
     parser.add_argument("--format-curriculum",
                         choices=("mixed", "copy2", "copy_count",
-                                 "copy_count_open"),
+                                 "copy_count_open", "copy_count_compositional"),
                         default="mixed")
     parser.add_argument("--long-context-count", type=int, default=500)
     parser.add_argument("--evaluation-file", action="append",

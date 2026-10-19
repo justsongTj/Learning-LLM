@@ -85,6 +85,46 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertEqual(case["rule"]["value"].split(","),
                              candidate_items[:len(case["rule"]["value"].split(","))])
 
+    def test_compositional_curriculum_balances_three_record_families(self):
+        records = MODULE.generate_format(
+            2000, 42, curriculum="copy_count_compositional")
+        family_counts = {"compositional": 0, "open": 0, "legacy": 0}
+        pattern = re.compile(
+            rf"^(?:{'|'.join(MODULE.COMPOSITIONAL_PREFIXES)})"
+            rf"[A-Z甲乙丙丁戊己庚辛壬癸]\d{{4}}$")
+        for record in records:
+            prompt, answer = MODULE.parse_instruction(record)
+            items = answer.split(",")
+            self.assertIn(len(items), (2, 3, 4))
+            self.assertIn("、".join(items), prompt)
+            if all(pattern.fullmatch(item) for item in items):
+                family_counts["compositional"] += 1
+                self.assertFalse(MODULE.COMPOSITIONAL_EVAL_ITEMS.intersection(items))
+            elif all(item in MODULE.OPEN_COPY_TRAIN_ITEMS for item in items):
+                family_counts["open"] += 1
+            else:
+                family_counts["legacy"] += 1
+        self.assertGreater(family_counts["compositional"], 1000)
+        self.assertGreater(family_counts["open"], 300)
+        self.assertGreater(family_counts["legacy"], 300)
+
+    def test_compositional_ood_uses_reserved_complete_identifiers(self):
+        evaluation = REPOSITORY / "data" / \
+            "instruction_eval_format_copy_compositional_v1.jsonl"
+        cases = [json.loads(line) for line in evaluation.read_text(
+            encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(cases), 30)
+        candidates = set()
+        for case in cases:
+            match = re.search(r"(?:为：|列表|排列：|清单：)(.+?)(?:。请|中按|。输出|。保留)",
+                              case["instruction"])
+            self.assertIsNotNone(match)
+            candidate_items = match.group(1).split("、")
+            candidates.update(candidate_items)
+            expected = case["rule"]["value"].split(",")
+            self.assertEqual(expected, candidate_items[:len(expected)])
+        self.assertEqual(candidates, set(MODULE.COMPOSITIONAL_EVAL_ITEMS))
+
     def test_long_context_filter_refills_to_requested_count(self):
         records = MODULE.generate_long_context(
             20, 42, record_filter=lambda record: "杭州" in record)
