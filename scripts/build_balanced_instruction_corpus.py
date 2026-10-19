@@ -99,7 +99,8 @@ def generate_uncertainty(count: int, seed: int, excluded_prompts=None):
     return sorted(records.values(), key=lambda value: stable_rank(value, seed))
 
 
-def generate_format(count: int, seed: int, excluded_prompts=None):
+def generate_format(count: int, seed: int, excluded_prompts=None,
+                    curriculum: str = "mixed"):
     excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 303)
     pools = {
@@ -113,6 +114,16 @@ def generate_format(count: int, seed: int, excluded_prompts=None):
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
         candidates = randomizer.sample(pools[category], len(pools[category]))
+        if curriculum == "copy2":
+            prompt = randomizer.choice((
+                f"候选{category}依次为：{'、'.join(candidates)}。请取前2项，使用英文逗号分隔，只输出结果。",
+                f"从列表{'、'.join(candidates)}中按原顺序选择前两项，用英文逗号分隔，不要解释。",
+            ))
+            prompt_key = normalize(prompt)
+            if prompt_key not in excluded_prompts:
+                records[prompt_key] = (
+                    f"指令:{prompt} 回答:{','.join(candidates[:2])}")
+            continue
         item_count = randomizer.choice((2, 3, 4))
         values = candidates[:item_count]
         separator_name, separator = randomizer.choice((
@@ -229,6 +240,8 @@ def main() -> int:
     parser.add_argument("--math-count", type=int, default=500)
     parser.add_argument("--uncertainty-count", type=int, default=500)
     parser.add_argument("--format-count", type=int, default=500)
+    parser.add_argument("--format-curriculum", choices=("mixed", "copy2"),
+                        default="mixed")
     parser.add_argument("--long-context-count", type=int, default=500)
     parser.add_argument("--evaluation-file", action="append",
                         help="evaluation JSONL to exclude; may be repeated")
@@ -272,7 +285,9 @@ def main() -> int:
         "math": generate_math(args.math_count, args.seed, evaluation_prompts),
         "uncertainty": generate_uncertainty(
             args.uncertainty_count, args.seed, evaluation_prompts),
-        "format": generate_format(args.format_count, args.seed, evaluation_prompts),
+        "format": generate_format(
+            args.format_count, args.seed, evaluation_prompts,
+            args.format_curriculum),
         "long_context": generate_long_context(
             args.long_context_count, args.seed, evaluation_prompts,
             long_context_filter),
@@ -312,6 +327,7 @@ def main() -> int:
         "category_counts": dict(sorted(output_counts.items())),
         "seed": args.seed,
         "validation_ratio": args.validation_ratio,
+        "format_curriculum": args.format_curriculum,
         "tokenizer_model": args.tokenizer_model,
         "min_long_context_input_tokens": (
             args.min_long_context_input_tokens if args.tokenizer_model else None),

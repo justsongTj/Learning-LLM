@@ -33,6 +33,8 @@ def evaluate_answer(case, answer):
     if rule_type == "exact_number":
         numbers = re.findall(r"(?<![\d.])-?\d+(?:\.\d+)?", answer)
         checks["exact_number"] = numbers == [str(rule["value"])]
+    elif rule_type == "exact_text":
+        checks["exact_text"] = answer.strip() == str(rule["value"]).strip()
     elif rule_type == "delimited_list":
         items = [item.strip() for item in re.split(rule.get("separator", r"[,，]"), answer)
                  if item.strip()]

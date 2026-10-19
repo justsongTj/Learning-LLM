@@ -1,0 +1,10 @@
+{"id":"copy2_fruit_1","category":"format_copy2","instruction":"候选水果依次为：草莓、梨、葡萄、苹果、橙子、香蕉。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"草莓,梨"}}
+{"id":"copy2_fruit_2","category":"format_copy2","instruction":"从列表橙子、葡萄、香蕉、梨、草莓、苹果中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"橙子,葡萄"}}
+{"id":"copy2_color_1","category":"format_copy2","instruction":"候选颜色依次为：紫色、黄色、绿色、橙色、蓝色、红色。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"紫色,黄色"}}
+{"id":"copy2_color_2","category":"format_copy2","instruction":"从列表红色、紫色、橙色、绿色、黄色、蓝色中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"红色,紫色"}}
+{"id":"copy2_sport_1","category":"format_copy2","instruction":"候选运动依次为：羽毛球、骑行、足球、游泳、篮球、跑步。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"羽毛球,骑行"}}
+{"id":"copy2_sport_2","category":"format_copy2","instruction":"从列表篮球、跑步、游泳、足球、骑行、羽毛球中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"篮球,跑步"}}
+{"id":"copy2_instrument_1","category":"format_copy2","instruction":"候选乐器依次为：古筝、小提琴、架子鼓、长笛、钢琴、吉他。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"古筝,小提琴"}}
+{"id":"copy2_instrument_2","category":"format_copy2","instruction":"从列表长笛、吉他、古筝、钢琴、架子鼓、小提琴中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"长笛,吉他"}}
+{"id":"copy2_language_1","category":"format_copy2","instruction":"候选编程语言依次为：Go、Java、Rust、C++、Python、JavaScript。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"Go,Java"}}
+{"id":"copy2_language_2","category":"format_copy2","instruction":"从列表JavaScript、C++、Go、Python、Java、Rust中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"JavaScript,C++"}}

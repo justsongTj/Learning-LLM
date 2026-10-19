@@ -12,6 +12,12 @@ SPEC.loader.exec_module(MODULE)
 
 
 class InstructionEvaluationTest(unittest.TestCase):
+    def test_exact_text_requires_clean_complete_answer(self):
+        case = {"rule": {"type": "exact_text", "value": "苹果,梨"}}
+        self.assertTrue(MODULE.evaluate_answer(case, "苹果,梨")[2])
+        self.assertFalse(MODULE.evaluate_answer(case, "答案是苹果,梨")[2])
+        self.assertFalse(MODULE.evaluate_answer(case, "苹果，梨")[2])
+
     def test_extracts_normalized_prompt_echo(self):
         prompt = "指令:根据已知信息回答：小吴有一台电脑。 回答:"
         generated = "指令:根据已知信息回答:小吴有一台电脑。 回答: 无法确定。"

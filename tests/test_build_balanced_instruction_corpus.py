@@ -18,6 +18,18 @@ SPEC.loader.exec_module(MODULE)
 
 
 class BuildBalancedInstructionCorpusTest(unittest.TestCase):
+    def test_copy2_curriculum_has_deterministic_order_and_separator(self):
+        records = MODULE.generate_format(100, 42, curriculum="copy2")
+        self.assertEqual(len(records), 100)
+        for record in records:
+            prompt, answer = MODULE.parse_instruction(record)
+            items = answer.split(",")
+            self.assertEqual(len(items), 2)
+            first = prompt.find(items[0])
+            second = prompt.find(items[1])
+            self.assertGreaterEqual(first, 0)
+            self.assertGreater(second, first)
+
     def test_long_context_filter_refills_to_requested_count(self):
         records = MODULE.generate_long_context(
             20, 42, record_filter=lambda record: "杭州" in record)
