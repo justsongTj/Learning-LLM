@@ -80,7 +80,7 @@ def generate_uncertainty(count: int, seed: int, excluded_prompts=None):
         "题目提供的信息不足，不能确定答案。",
         "已知条件中没有相关信息，因此无法判断。",
     )
-    records = set()
+    records = {}
     while len(records) < count:
         name = randomizer.choice(names)
         item = randomizer.choice(owned)
@@ -92,9 +92,11 @@ def generate_uncertainty(count: int, seed: int, excluded_prompts=None):
             f"阅读事实后作答：{name}拥有{item}。资料没有给出其他属性。能否确定它的{attribute}？",
             f"现有记录仅表明{name}有{item}，还提到{fact}。请判断该物品的{attribute}。",
         ))
-        if normalize(prompt) not in excluded_prompts:
-            records.add(f"指令:{prompt} 回答:{randomizer.choice(answers)}")
-    return sorted(records, key=lambda value: stable_rank(value, seed))
+        prompt_key = normalize(prompt)
+        if prompt_key not in excluded_prompts:
+            answer_index = int.from_bytes(stable_rank(prompt_key, seed)[:4], "big") % len(answers)
+            records[prompt_key] = f"指令:{prompt} 回答:{answers[answer_index]}"
+    return sorted(records.values(), key=lambda value: stable_rank(value, seed))
 
 
 def generate_format(count: int, seed: int, excluded_prompts=None):
@@ -107,11 +109,12 @@ def generate_format(count: int, seed: int, excluded_prompts=None):
         "运动": ("跑步", "游泳", "骑行", "篮球", "羽毛球", "足球"),
         "乐器": ("钢琴", "吉他", "小提琴", "长笛", "架子鼓", "古筝"),
     }
-    records = set()
+    records = {}
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
+        candidates = randomizer.sample(pools[category], len(pools[category]))
         item_count = randomizer.choice((2, 3, 4))
-        values = randomizer.sample(pools[category], item_count)
+        values = candidates[:item_count]
         separator_name, separator = randomizer.choice((
             ("英文逗号", ","), ("中文逗号", "，"), ("顿号", "、"),
         ))
@@ -120,10 +123,18 @@ def generate_format(count: int, seed: int, excluded_prompts=None):
             f"仅列出{chinese_count}种常见的{category}，使用{separator_name}分隔，不要添加解释。",
             f"请写出{item_count}种{category}，各项之间用{separator_name}分隔，只输出列表。",
             f"按要求输出{category}：数量为{item_count}，分隔符为{separator_name}，不要说明原因。",
+            f"候选{category}依次为：{'、'.join(candidates)}。请取前{item_count}项，使用{separator_name}分隔，只输出结果。",
+            f"从列表{'、'.join(candidates)}中按原顺序选择前{chinese_count}项，用{separator_name}分隔，不要解释。",
         ))
-        if normalize(prompt) not in excluded_prompts:
-            records.add(f"指令:{prompt} 回答:{separator.join(values)}")
-    return sorted(records, key=lambda value: stable_rank(value, seed))
+        prompt_key = normalize(prompt)
+        if prompt_key not in excluded_prompts:
+            if "候选" not in prompt and "从列表" not in prompt:
+                ordered = sorted(
+                    pools[category], key=lambda value: stable_rank(
+                        f"{prompt_key}\0{value}", seed))
+                values = ordered[:item_count]
+            records[prompt_key] = f"指令:{prompt} 回答:{separator.join(values)}"
+    return sorted(records.values(), key=lambda value: stable_rank(value, seed))
 
 
 def generate_long_context(count: int, seed: int, excluded_prompts=None,
@@ -278,7 +289,7 @@ def main() -> int:
             prompt, _ = parse_instruction(record)
             if normalize(prompt) in evaluation_prompts:
                 continue
-            destination = validation if stable_bucket(record, args.seed) < cutoff else train
+            destination = validation if stable_bucket(normalize(prompt), args.seed) < cutoff else train
             destination.append(record)
             output_counts[category] += 1
 

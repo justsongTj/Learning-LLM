@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -10,9 +11,20 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCRIPT = REPOSITORY / "scripts" / "prepare_instruction_corpus.py"
+SPEC = importlib.util.spec_from_file_location("prepare_instruction_corpus", SCRIPT)
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
 
 
 class PrepareInstructionCorpusTest(unittest.TestCase):
+    def test_uses_last_answer_marker_when_prompt_contains_the_word(self):
+        parsed = MODULE.parse_instruction(
+            "指令:根据已知信息回答：小王有一本书。它的价格是什么？ "
+            "回答:根据现有信息无法确定。")
+        self.assertEqual(parsed, (
+            "根据已知信息回答:小王有一本书。它的价格是什么?",
+            "根据现有信息无法确定。"))
+
     def test_normalizes_filters_deduplicates_and_excludes_evaluation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

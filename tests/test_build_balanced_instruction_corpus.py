@@ -56,6 +56,9 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertTrue(any("无法" in record or "信息不足" in record for record in records))
             self.assertTrue(any("第一条关键信息" in record or "资料开头" in record
                                 for record in records))
+            prompts = [MODULE.normalize(MODULE.parse_instruction(record)[0])
+                       for record in records]
+            self.assertEqual(len(prompts), len(set(prompts)))
 
     def test_excludes_evaluation_prompts_without_reducing_target_counts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,11 +86,19 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             ], check=True, cwd=REPOSITORY, capture_output=True, text=True, encoding="utf-8")
 
             report = json.loads(stats.read_text(encoding="utf-8"))
-            records = train.read_text(encoding="utf-8").splitlines() + \
-                validation.read_text(encoding="utf-8").splitlines()
+            train_records = train.read_text(encoding="utf-8").splitlines()
+            validation_records = validation.read_text(encoding="utf-8").splitlines()
+            records = train_records + validation_records
             self.assertEqual(report["total_records"], 50)
             self.assertFalse(any(MODULE.parse_instruction(record)[0] == held_out
                                  for record in records))
+            train_prompts = {
+                MODULE.normalize(MODULE.parse_instruction(record)[0])
+                for record in train_records}
+            validation_prompts = {
+                MODULE.normalize(MODULE.parse_instruction(record)[0])
+                for record in validation_records}
+            self.assertFalse(train_prompts & validation_prompts)
 
     def test_allows_disabling_unwanted_task_families(self):
         with tempfile.TemporaryDirectory() as directory:

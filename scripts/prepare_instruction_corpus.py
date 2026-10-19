@@ -76,9 +76,10 @@ def load_reject_patterns(filename: Optional[str]) -> List[Pattern[str]]:
 
 def parse_instruction(line: str) -> Optional[Tuple[str, str]]:
     text = normalize(line)
-    marker = ANSWER_MARKER_RE.search(text)
-    if not marker:
+    markers = list(ANSWER_MARKER_RE.finditer(text))
+    if not markers:
         return None
+    marker = markers[-1]
     prompt = LEADING_LABEL_RE.sub("", text[:marker.start()].strip(), count=1)
     answer = text[marker.end():].strip()
     return prompt, answer

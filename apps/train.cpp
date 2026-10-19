@@ -21,7 +21,7 @@
 namespace {
 
 constexpr std::array<char, 8> training_magic{{'T', 'D', 'L', 'T', 'R', 'N', '0', '1'}};
-constexpr std::array<char, 8> corpus_magic{{'T', 'D', 'L', 'C', 'R', 'P', '0', '2'}};
+constexpr std::array<char, 8> corpus_magic{{'T', 'D', 'L', 'C', 'R', 'P', '0', '3'}};
 
 template <typename T>
 void write_value(std::ostream& stream, const T& value) {
@@ -190,11 +190,19 @@ EncodedCorpus encode_corpus(const std::string& path,
         if (line.empty()) continue;
         const std::string marker = "回答:";
         const std::string full_width_marker = "回答：";
-        std::size_t answer_position = answer_only_loss ? line.find(marker) : std::string::npos;
+        std::size_t answer_position = std::string::npos;
         std::size_t marker_size = marker.size();
-        if (answer_only_loss && answer_position == std::string::npos) {
-            answer_position = line.find(full_width_marker);
-            marker_size = full_width_marker.size();
+        if (answer_only_loss) {
+            const auto ascii_position = line.rfind(marker);
+            const auto full_width_position = line.rfind(full_width_marker);
+            if (ascii_position != std::string::npos &&
+                (full_width_position == std::string::npos ||
+                 ascii_position > full_width_position)) {
+                answer_position = ascii_position;
+            } else if (full_width_position != std::string::npos) {
+                answer_position = full_width_position;
+                marker_size = full_width_marker.size();
+            }
         }
 
         std::vector<int> record_tokens;
