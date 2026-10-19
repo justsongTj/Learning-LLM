@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -10,6 +11,10 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 SCRIPT = REPOSITORY / "scripts" / "build_balanced_instruction_corpus.py"
+sys.path.insert(0, str(SCRIPT.parent))
+SPEC = importlib.util.spec_from_file_location("build_balanced_instruction_corpus", SCRIPT)
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
 
 
 class BuildBalancedInstructionCorpusTest(unittest.TestCase):
@@ -44,6 +49,38 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertTrue(any("无法" in record or "信息不足" in record for record in records))
             self.assertTrue(any("第一条关键信息" in record or "资料开头" in record
                                 for record in records))
+
+    def test_excludes_evaluation_prompts_without_reducing_target_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "strict.txt"
+            evaluation = root / "eval.jsonl"
+            train = root / "train.txt"
+            validation = root / "validation.txt"
+            stats = root / "stats.json"
+            source.write_text("\n".join(
+                f"指令:将“样例{i}”翻译成英语。 回答:Example {i}."
+                for i in range(20)) + "\n", encoding="utf-8")
+            held_out, _ = MODULE.parse_instruction(MODULE.generate_math(10, 42)[0])
+            evaluation.write_text(
+                json.dumps({"id": "held_out", "instruction": held_out},
+                           ensure_ascii=False) + "\n", encoding="utf-8")
+
+            subprocess.run([
+                sys.executable, str(SCRIPT), "--input", str(source),
+                "--train-output", str(train), "--validation-output", str(validation),
+                "--stats-output", str(stats), "--translation-count", "10",
+                "--math-count", "10", "--uncertainty-count", "10",
+                "--format-count", "10", "--long-context-count", "10",
+                "--evaluation-file", str(evaluation), "--validation-ratio", "0.5",
+            ], check=True, cwd=REPOSITORY, capture_output=True, text=True, encoding="utf-8")
+
+            report = json.loads(stats.read_text(encoding="utf-8"))
+            records = train.read_text(encoding="utf-8").splitlines() + \
+                validation.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(report["total_records"], 50)
+            self.assertFalse(any(MODULE.parse_instruction(record)[0] == held_out
+                                 for record in records))
 
 
 if __name__ == "__main__":

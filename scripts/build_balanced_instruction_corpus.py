@@ -16,7 +16,8 @@ def stable_rank(text: str, seed: int) -> bytes:
     return hashlib.sha256(f"{seed}\0{text}".encode("utf-8")).digest()
 
 
-def load_translation_records(paths, limit: int, seed: int):
+def load_translation_records(paths, limit: int, seed: int, excluded_prompts=None):
+    excluded_prompts = excluded_prompts or set()
     records = set()
     for filename in paths:
         with Path(filename).open(encoding="utf-8") as stream:
@@ -25,13 +26,15 @@ def load_translation_records(paths, limit: int, seed: int):
                 if not parsed:
                     continue
                 prompt, answer = parsed
-                if classify_task(prompt) == "translation":
+                if (classify_task(prompt) == "translation"
+                        and normalize(prompt) not in excluded_prompts):
                     records.add(f"指令:{prompt} 回答:{answer}")
     ordered = sorted(records, key=lambda value: stable_rank(value, seed))
     return ordered[:limit]
 
 
-def generate_math(count: int, seed: int):
+def generate_math(count: int, seed: int, excluded_prompts=None):
+    excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 101)
     records = set()
     while len(records) < count:
@@ -54,11 +57,13 @@ def generate_math(count: int, seed: int):
             f"求{expression}的值，不要写计算过程。",
             f"完成下面的计算题：{expression}。答案仅保留整数。",
         ))
-        records.add(f"指令:{prompt} 回答:{result}")
+        if normalize(prompt) not in excluded_prompts:
+            records.add(f"指令:{prompt} 回答:{result}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
-def generate_uncertainty(count: int, seed: int):
+def generate_uncertainty(count: int, seed: int, excluded_prompts=None):
+    excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 202)
     names = ("小王", "小李", "小张", "小陈", "小林", "小周", "小赵", "小孙")
     owned = ("一本书", "一辆自行车", "一台电脑", "一只背包", "一部手机", "一把雨伞")
@@ -87,11 +92,13 @@ def generate_uncertainty(count: int, seed: int):
             f"阅读事实后作答：{name}拥有{item}。资料没有给出其他属性。能否确定它的{attribute}？",
             f"现有记录仅表明{name}有{item}，还提到{fact}。请判断该物品的{attribute}。",
         ))
-        records.add(f"指令:{prompt} 回答:{randomizer.choice(answers)}")
+        if normalize(prompt) not in excluded_prompts:
+            records.add(f"指令:{prompt} 回答:{randomizer.choice(answers)}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
-def generate_format(count: int, seed: int):
+def generate_format(count: int, seed: int, excluded_prompts=None):
+    excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 303)
     pools = {
         "编程语言": ("Python", "C++", "Rust", "Java", "Go", "JavaScript"),
@@ -114,12 +121,14 @@ def generate_format(count: int, seed: int):
             f"请写出{item_count}种{category}，各项之间用{separator_name}分隔，只输出列表。",
             f"按要求输出{category}：数量为{item_count}，分隔符为{separator_name}，不要说明原因。",
         ))
-        records.add(f"指令:{prompt} 回答:{separator.join(values)}")
+        if normalize(prompt) not in excluded_prompts:
+            records.add(f"指令:{prompt} 回答:{separator.join(values)}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
-def generate_long_context(count: int, seed: int):
+def generate_long_context(count: int, seed: int, excluded_prompts=None):
     """Generate grounded prompts whose answer depends on facts near the beginning."""
+    excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 404)
     names = ("林晨", "周宁", "陈远", "赵清", "孙悦", "吴桐")
     cities = ("杭州", "成都", "青岛", "昆明", "苏州", "厦门")
@@ -146,7 +155,8 @@ def generate_long_context(count: int, seed: int):
         prompt = templates[template_index].format(
             name=name, city=city, activity=activity, details=details)
         answer = city if template_index == 0 else activity
-        records.add(f"指令:{prompt} 回答:{answer}")
+        if normalize(prompt) not in excluded_prompts:
+            records.add(f"指令:{prompt} 回答:{answer}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
@@ -192,21 +202,24 @@ def main() -> int:
     if not 0.0 < args.validation_ratio < 1.0:
         parser.error("validation-ratio must be between zero and one")
 
-    groups = {
-        "translation": load_translation_records(args.input, args.translation_count, args.seed),
-        "math": generate_math(args.math_count, args.seed),
-        "uncertainty": generate_uncertainty(args.uncertainty_count, args.seed),
-        "format": generate_format(args.format_count, args.seed),
-        "long_context": generate_long_context(args.long_context_count, args.seed),
-    }
-    if len(groups["translation"]) < args.translation_count:
-        raise RuntimeError(
-            f"requested {args.translation_count} translations but found {len(groups['translation'])}")
-
     evaluation_paths = args.evaluation_file or [
         Path(__file__).resolve().parents[1] / "data" / "instruction_eval_narrow_v3.jsonl"
     ]
     evaluation_prompts = load_evaluation_prompts(evaluation_paths)
+
+    groups = {
+        "translation": load_translation_records(
+            args.input, args.translation_count, args.seed, evaluation_prompts),
+        "math": generate_math(args.math_count, args.seed, evaluation_prompts),
+        "uncertainty": generate_uncertainty(
+            args.uncertainty_count, args.seed, evaluation_prompts),
+        "format": generate_format(args.format_count, args.seed, evaluation_prompts),
+        "long_context": generate_long_context(
+            args.long_context_count, args.seed, evaluation_prompts),
+    }
+    if len(groups["translation"]) < args.translation_count:
+        raise RuntimeError(
+            f"requested {args.translation_count} translations but found {len(groups['translation'])}")
 
     train, validation = [], []
     output_counts = Counter()
