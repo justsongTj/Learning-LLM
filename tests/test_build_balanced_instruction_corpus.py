@@ -89,6 +89,31 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertFalse(any(MODULE.parse_instruction(record)[0] == held_out
                                  for record in records))
 
+    def test_allows_disabling_unwanted_task_families(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "strict.txt"
+            train = root / "train.txt"
+            validation = root / "validation.txt"
+            stats = root / "stats.json"
+            source.write_text(
+                "指令:将“测试”翻译成英语。 回答:Test.\n", encoding="utf-8")
+
+            subprocess.run([
+                sys.executable, str(SCRIPT), "--input", str(source),
+                "--train-output", str(train), "--validation-output", str(validation),
+                "--stats-output", str(stats), "--translation-count", "0",
+                "--math-count", "0", "--uncertainty-count", "20",
+                "--format-count", "20", "--long-context-count", "0",
+                "--validation-ratio", "0.5",
+            ], check=True, cwd=REPOSITORY, capture_output=True, text=True,
+               encoding="utf-8")
+
+            report = json.loads(stats.read_text(encoding="utf-8"))
+            self.assertEqual(report["total_records"], 40)
+            self.assertEqual(set(report["category_counts"]),
+                             {"uncertainty", "format"})
+
 
 if __name__ == "__main__":
     unittest.main()

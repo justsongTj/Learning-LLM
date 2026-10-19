@@ -232,13 +232,16 @@ def main() -> int:
     counts = (args.translation_count, args.math_count,
               args.uncertainty_count, args.format_count,
               args.long_context_count)
-    if any(value <= 0 for value in counts):
-        parser.error("all task counts must be positive")
+    if any(value < 0 for value in counts):
+        parser.error("task counts must not be negative")
+    if not any(counts):
+        parser.error("at least one task count must be positive")
     if not 0.0 < args.validation_ratio < 1.0:
         parser.error("validation-ratio must be between zero and one")
-    if args.min_long_context_input_tokens <= 0:
+    if args.long_context_count > 0 and args.min_long_context_input_tokens <= 0:
         parser.error("min-long-context-input-tokens must be positive")
-    if args.max_input_tokens < args.min_long_context_input_tokens:
+    if (args.long_context_count > 0
+            and args.max_input_tokens < args.min_long_context_input_tokens):
         parser.error("max-input-tokens must be at least min-long-context-input-tokens")
 
     evaluation_paths = args.evaluation_file or [
@@ -246,7 +249,7 @@ def main() -> int:
     ]
     evaluation_prompts = load_evaluation_prompts(evaluation_paths)
     long_context_filter = None
-    if args.tokenizer_model:
+    if args.tokenizer_model and args.long_context_count > 0:
         long_context_filter = make_token_length_filter(
             args.tokenizer_model,
             args.min_long_context_input_tokens,

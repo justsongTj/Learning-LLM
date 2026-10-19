@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -63,6 +64,8 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--tokenizer", required=True)
     parser.add_argument("--evaluation-file", default="data/instruction_eval_zh.jsonl")
+    parser.add_argument("--include-category", action="append",
+                        help="only evaluate these categories; may be repeated")
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", help="HIP_VISIBLE_DEVICES value")
     parser.add_argument("--max-new-tokens", type=int, default=100)
@@ -79,12 +82,18 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total = keyword_passes = 0
+    category_totals = Counter()
+    category_passes = Counter()
     with Path(args.evaluation_file).open("r", encoding="utf-8") as source, \
             output_path.open("w", encoding="utf-8", newline="\n") as destination:
         for line_number, raw in enumerate(source, 1):
             if not raw.strip():
                 continue
             case = json.loads(raw)
+            category = case.get("category", "uncategorized")
+            if (args.include_category
+                    and category not in set(args.include_category)):
+                continue
             prompt = f"指令:{case['instruction']} 回答:"
             command = [
                 args.binary, args.model, args.tokenizer, prompt,
@@ -111,10 +120,14 @@ def main() -> int:
             destination.write(json.dumps(result, ensure_ascii=False) + "\n")
             total += 1
             keyword_passes += int(result["pass"])
+            category_totals[category] += 1
+            category_passes[category] += int(result["pass"])
             print(f"[{line_number}] {case['id']}: {answer}")
 
     print(f"wrote {total} results to {output_path}; "
           f"strict rule pass {keyword_passes}/{total}")
+    for category in sorted(category_totals):
+        print(f"  {category}: {category_passes[category]}/{category_totals[category]}")
     return 0
 
 
