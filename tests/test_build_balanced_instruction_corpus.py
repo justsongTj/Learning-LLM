@@ -18,6 +18,12 @@ SPEC.loader.exec_module(MODULE)
 
 
 class BuildBalancedInstructionCorpusTest(unittest.TestCase):
+    def test_long_context_filter_refills_to_requested_count(self):
+        records = MODULE.generate_long_context(
+            20, 42, record_filter=lambda record: "杭州" in record)
+        self.assertEqual(len(records), 20)
+        self.assertTrue(all("杭州" in record for record in records))
+
     def test_builds_deterministic_balanced_splits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -36,7 +42,8 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
                 "--math-count", "10", "--uncertainty-count", "10",
                 "--format-count", "10", "--long-context-count", "10",
                 "--validation-ratio", "0.5",
-            ], check=True, cwd=REPOSITORY, capture_output=True, text=True, encoding="utf-8")
+            ], check=True, cwd=REPOSITORY, capture_output=True, text=True,
+               encoding="utf-8")
 
             report = json.loads(stats.read_text(encoding="utf-8"))
             records = train.read_text(encoding="utf-8").splitlines() + \

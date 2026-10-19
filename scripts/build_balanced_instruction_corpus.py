@@ -126,7 +126,8 @@ def generate_format(count: int, seed: int, excluded_prompts=None):
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
-def generate_long_context(count: int, seed: int, excluded_prompts=None):
+def generate_long_context(count: int, seed: int, excluded_prompts=None,
+                          record_filter=None):
     """Generate grounded prompts whose answer depends on facts near the beginning."""
     excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 404)
@@ -150,13 +151,15 @@ def generate_long_context(count: int, seed: int, excluded_prompts=None):
         name = randomizer.choice(names)
         city = randomizer.choice(cities)
         activity = randomizer.choice(activities)
-        details = "".join(randomizer.sample(distractors, len(distractors)))
+        details = "".join(randomizer.sample(distractors, 4))
         template_index = randomizer.randrange(len(templates))
         prompt = templates[template_index].format(
             name=name, city=city, activity=activity, details=details)
         answer = city if template_index == 0 else activity
-        if normalize(prompt) not in excluded_prompts:
-            records.add(f"指令:{prompt} 回答:{answer}")
+        record = f"指令:{prompt} 回答:{answer}"
+        if (normalize(prompt) not in excluded_prompts
+                and (record_filter is None or record_filter(record))):
+            records.add(record)
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
 
@@ -176,6 +179,27 @@ def load_evaluation_prompts(paths):
     return prompts
 
 
+def make_token_length_filter(tokenizer_model, minimum: int, maximum: int):
+    try:
+        import sentencepiece as spm
+    except ImportError as error:
+        raise RuntimeError(
+            "sentencepiece is required when --tokenizer-model is used") from error
+
+    tokenizer = spm.SentencePieceProcessor(model_file=str(tokenizer_model))
+
+    def accepts(record):
+        record_tokens = (
+            len(tokenizer.encode(record, out_type=int))
+            + int(tokenizer.bos_id() >= 0)
+            + int(tokenizer.eos_id() >= 0)
+        )
+        input_tokens = record_tokens - 1
+        return minimum <= input_tokens <= maximum
+
+    return accepts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", action="append", required=True,
@@ -190,6 +214,10 @@ def main() -> int:
     parser.add_argument("--long-context-count", type=int, default=500)
     parser.add_argument("--evaluation-file", action="append",
                         help="evaluation JSONL to exclude; may be repeated")
+    parser.add_argument("--tokenizer-model",
+                        help="SentencePiece model used to enforce long-context length")
+    parser.add_argument("--min-long-context-input-tokens", type=int, default=129)
+    parser.add_argument("--max-input-tokens", type=int, default=256)
     parser.add_argument("--validation-ratio", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -201,11 +229,21 @@ def main() -> int:
         parser.error("all task counts must be positive")
     if not 0.0 < args.validation_ratio < 1.0:
         parser.error("validation-ratio must be between zero and one")
+    if args.min_long_context_input_tokens <= 0:
+        parser.error("min-long-context-input-tokens must be positive")
+    if args.max_input_tokens < args.min_long_context_input_tokens:
+        parser.error("max-input-tokens must be at least min-long-context-input-tokens")
 
     evaluation_paths = args.evaluation_file or [
         Path(__file__).resolve().parents[1] / "data" / "instruction_eval_narrow_v3.jsonl"
     ]
     evaluation_prompts = load_evaluation_prompts(evaluation_paths)
+    long_context_filter = None
+    if args.tokenizer_model:
+        long_context_filter = make_token_length_filter(
+            args.tokenizer_model,
+            args.min_long_context_input_tokens,
+            args.max_input_tokens)
 
     groups = {
         "translation": load_translation_records(
@@ -215,7 +253,8 @@ def main() -> int:
             args.uncertainty_count, args.seed, evaluation_prompts),
         "format": generate_format(args.format_count, args.seed, evaluation_prompts),
         "long_context": generate_long_context(
-            args.long_context_count, args.seed, evaluation_prompts),
+            args.long_context_count, args.seed, evaluation_prompts,
+            long_context_filter),
     }
     if len(groups["translation"]) < args.translation_count:
         raise RuntimeError(
@@ -252,6 +291,10 @@ def main() -> int:
         "category_counts": dict(sorted(output_counts.items())),
         "seed": args.seed,
         "validation_ratio": args.validation_ratio,
+        "tokenizer_model": args.tokenizer_model,
+        "min_long_context_input_tokens": (
+            args.min_long_context_input_tokens if args.tokenizer_model else None),
+        "max_input_tokens": args.max_input_tokens if args.tokenizer_model else None,
     }
     stats_path = Path(args.stats_output)
     stats_path.parent.mkdir(parents=True, exist_ok=True)
