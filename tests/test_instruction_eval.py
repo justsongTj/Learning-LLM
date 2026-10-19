@@ -24,9 +24,17 @@ class InstructionEvaluationTest(unittest.TestCase):
 
     def test_delimited_list_requires_exact_item_count(self):
         case = {"rule": {"type": "delimited_list", "count": 3,
-                         "separator": "[,，]"}}
+                         "separator": "[,，]",
+                         "allowed_items": ["C", "Python", "Rust"]}}
         self.assertTrue(MODULE.evaluate_answer(case, "C,Python,Rust")[2])
         self.assertFalse(MODULE.evaluate_answer(case, "我知道，很多，语言，类型")[2])
+        self.assertFalse(MODULE.evaluate_answer(case, "甲,乙,丙")[2])
+        self.assertFalse(MODULE.evaluate_answer(case, "C,C,Rust")[2])
+
+    def test_regex_can_require_multiple_patterns(self):
+        case = {"rule": {"type": "regex", "patterns": [r"\bI\b", "morning", "walk"]}}
+        self.assertTrue(MODULE.evaluate_answer(case, "I walk in the morning.")[2])
+        self.assertFalse(MODULE.evaluate_answer(case, "I like artificial intelligence.")[2])
 
     def test_contains_any_accepts_uncertainty_variants(self):
         case = {"rule": {"type": "contains_any",

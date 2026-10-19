@@ -35,12 +35,22 @@ def evaluate_answer(case, answer):
     elif rule_type == "delimited_list":
         items = [item.strip() for item in re.split(rule.get("separator", r"[,，]"), answer)
                  if item.strip()]
-        checks["delimited_list"] = len(items) == int(rule["count"])
+        allowed = rule.get("allowed_items")
+        checks["delimited_list"] = (
+            len(items) == int(rule["count"])
+            and len(set(items)) == len(items)
+            and (allowed is None or all(item in allowed for item in items))
+        )
     elif rule_type == "contains_any":
         checks["contains_any"] = any(
             value.lower() in answer.lower() for value in rule.get("values", []))
     elif rule_type == "regex":
-        checks["regex"] = re.search(rule["pattern"], answer, re.IGNORECASE) is not None
+        patterns = rule.get("patterns")
+        if patterns is None:
+            patterns = [rule["pattern"]]
+        checks["regex"] = all(
+            re.search(pattern, answer, re.IGNORECASE) is not None
+            for pattern in patterns)
     elif rule_type:
         raise ValueError(f"unknown evaluation rule type: {rule_type}")
 

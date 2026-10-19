@@ -29,17 +29,21 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
                 "--train-output", str(train), "--validation-output", str(validation),
                 "--stats-output", str(stats), "--translation-count", "10",
                 "--math-count", "10", "--uncertainty-count", "10",
-                "--format-count", "10", "--validation-ratio", "0.5",
+                "--format-count", "10", "--long-context-count", "10",
+                "--validation-ratio", "0.5",
             ], check=True, cwd=REPOSITORY, capture_output=True, text=True, encoding="utf-8")
 
             report = json.loads(stats.read_text(encoding="utf-8"))
             records = train.read_text(encoding="utf-8").splitlines() + \
                 validation.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(report["total_records"], 40)
+            self.assertEqual(report["total_records"], 50)
             self.assertEqual(set(report["category_counts"]),
-                             {"translation", "math", "uncertainty", "format"})
+                             {"translation", "math", "uncertainty", "format",
+                              "long_context"})
             self.assertTrue(all(record.startswith("指令:") for record in records))
             self.assertTrue(any("无法" in record or "信息不足" in record for record in records))
+            self.assertTrue(any("第一条关键信息" in record or "资料开头" in record
+                                for record in records))
 
 
 if __name__ == "__main__":

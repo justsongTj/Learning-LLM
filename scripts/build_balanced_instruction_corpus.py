@@ -46,9 +46,13 @@ def generate_math(count: int, seed: int):
         else:
             left, right = randomizer.randint(2, 20), randomizer.randint(2, 20)
             result = left * right
+        expression = f"{left}{operation}{right}"
         prompt = randomizer.choice((
-            f"计算{left}{operation}{right}。",
-            f"请给出算式{left}{operation}{right}的结果。",
+            f"计算{expression}。",
+            f"请给出算式{expression}的结果。",
+            f"{expression}等于多少？只写数字。",
+            f"求{expression}的值，不要写计算过程。",
+            f"完成下面的计算题：{expression}。答案仅保留整数。",
         ))
         records.add(f"指令:{prompt} 回答:{result}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
@@ -59,6 +63,13 @@ def generate_uncertainty(count: int, seed: int):
     names = ("小王", "小李", "小张", "小陈", "小林", "小周", "小赵", "小孙")
     owned = ("一本书", "一辆自行车", "一台电脑", "一只背包", "一部手机", "一把雨伞")
     unknowns = ("价格", "品牌", "颜色", "购买日期", "生产地点", "重量")
+    knowns = (
+        "这件物品目前由本人使用",
+        "它被妥善保管着",
+        "今天确认它仍然存在",
+        "物品的主人没有发生变化",
+        "记录中只说明了所有权",
+    )
     answers = (
         "根据现有信息无法确定。",
         "题目提供的信息不足，不能确定答案。",
@@ -69,7 +80,13 @@ def generate_uncertainty(count: int, seed: int):
         name = randomizer.choice(names)
         item = randomizer.choice(owned)
         attribute = randomizer.choice(unknowns)
-        prompt = f"根据已知信息回答：{name}有{item}。它的{attribute}是什么？"
+        fact = randomizer.choice(knowns)
+        prompt = randomizer.choice((
+            f"根据已知信息回答：{name}有{item}。它的{attribute}是什么？",
+            f"已知{name}有{item}，并且{fact}。请问它的{attribute}是什么？",
+            f"阅读事实后作答：{name}拥有{item}。资料没有给出其他属性。能否确定它的{attribute}？",
+            f"现有记录仅表明{name}有{item}，还提到{fact}。请判断该物品的{attribute}。",
+        ))
         records.add(f"指令:{prompt} 回答:{randomizer.choice(answers)}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
 
@@ -86,10 +103,67 @@ def generate_format(count: int, seed: int):
     records = set()
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
-        values = randomizer.sample(pools[category], 3)
-        prompt = f"仅列出三种常见的{category}，使用逗号分隔，不要添加解释。"
-        records.add(f"指令:{prompt} 回答:{','.join(values)}")
+        item_count = randomizer.choice((2, 3, 4))
+        values = randomizer.sample(pools[category], item_count)
+        separator_name, separator = randomizer.choice((
+            ("英文逗号", ","), ("中文逗号", "，"), ("顿号", "、"),
+        ))
+        chinese_count = {2: "两", 3: "三", 4: "四"}[item_count]
+        prompt = randomizer.choice((
+            f"仅列出{chinese_count}种常见的{category}，使用{separator_name}分隔，不要添加解释。",
+            f"请写出{item_count}种{category}，各项之间用{separator_name}分隔，只输出列表。",
+            f"按要求输出{category}：数量为{item_count}，分隔符为{separator_name}，不要说明原因。",
+        ))
+        records.add(f"指令:{prompt} 回答:{separator.join(values)}")
     return sorted(records, key=lambda value: stable_rank(value, seed))
+
+
+def generate_long_context(count: int, seed: int):
+    """Generate grounded prompts whose answer depends on facts near the beginning."""
+    randomizer = random.Random(seed + 404)
+    names = ("林晨", "周宁", "陈远", "赵清", "孙悦", "吴桐")
+    cities = ("杭州", "成都", "青岛", "昆明", "苏州", "厦门")
+    activities = ("阅读", "游泳", "摄影", "跑步", "绘画", "下棋")
+    distractors = (
+        "会议室在二楼，窗边摆着三盆绿植。",
+        "当天上午天气晴朗，下午有短时阵雨。",
+        "记录员使用蓝色文件夹整理了全部材料。",
+        "活动结束后，工作人员检查了门窗和照明。",
+        "公告栏上还张贴着下周的值班安排。",
+        "参与者依次签名，并在入口领取了号码牌。",
+    )
+    templates = (
+        "请阅读记录并回答最后的问题。第一条关键信息：{name}居住在{city}，最喜欢的活动是{activity}。{details}根据记录，{name}居住在哪座城市？",
+        "根据以下资料作答。资料开头说明{name}来自{city}，业余爱好是{activity}。{details}问题：{name}的业余爱好是什么？",
+    )
+    records = set()
+    while len(records) < count:
+        name = randomizer.choice(names)
+        city = randomizer.choice(cities)
+        activity = randomizer.choice(activities)
+        details = "".join(randomizer.sample(distractors, len(distractors)))
+        template_index = randomizer.randrange(len(templates))
+        prompt = templates[template_index].format(
+            name=name, city=city, activity=activity, details=details)
+        answer = city if template_index == 0 else activity
+        records.add(f"指令:{prompt} 回答:{answer}")
+    return sorted(records, key=lambda value: stable_rank(value, seed))
+
+
+def load_evaluation_prompts(paths):
+    prompts = set()
+    for filename in paths:
+        with Path(filename).open(encoding="utf-8") as stream:
+            for line_number, raw in enumerate(stream, 1):
+                if not raw.strip():
+                    continue
+                item = json.loads(raw)
+                instruction = item.get("instruction")
+                if not isinstance(instruction, str) or not instruction.strip():
+                    raise ValueError(
+                        f"missing instruction at {filename}:{line_number}")
+                prompts.add(normalize(instruction))
+    return prompts
 
 
 def main() -> int:
@@ -103,12 +177,16 @@ def main() -> int:
     parser.add_argument("--math-count", type=int, default=500)
     parser.add_argument("--uncertainty-count", type=int, default=500)
     parser.add_argument("--format-count", type=int, default=500)
+    parser.add_argument("--long-context-count", type=int, default=500)
+    parser.add_argument("--evaluation-file", action="append",
+                        help="evaluation JSONL to exclude; may be repeated")
     parser.add_argument("--validation-ratio", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     counts = (args.translation_count, args.math_count,
-              args.uncertainty_count, args.format_count)
+              args.uncertainty_count, args.format_count,
+              args.long_context_count)
     if any(value <= 0 for value in counts):
         parser.error("all task counts must be positive")
     if not 0.0 < args.validation_ratio < 1.0:
@@ -119,16 +197,16 @@ def main() -> int:
         "math": generate_math(args.math_count, args.seed),
         "uncertainty": generate_uncertainty(args.uncertainty_count, args.seed),
         "format": generate_format(args.format_count, args.seed),
+        "long_context": generate_long_context(args.long_context_count, args.seed),
     }
     if len(groups["translation"]) < args.translation_count:
         raise RuntimeError(
             f"requested {args.translation_count} translations but found {len(groups['translation'])}")
 
-    evaluation_prompts = set()
-    evaluation_path = Path(__file__).resolve().parents[1] / "data" / "instruction_eval_narrow_v3.jsonl"
-    with evaluation_path.open(encoding="utf-8") as stream:
-        for raw in stream:
-            evaluation_prompts.add(normalize(json.loads(raw)["instruction"]))
+    evaluation_paths = args.evaluation_file or [
+        Path(__file__).resolve().parents[1] / "data" / "instruction_eval_narrow_v3.jsonl"
+    ]
+    evaluation_prompts = load_evaluation_prompts(evaluation_paths)
 
     train, validation = [], []
     output_counts = Counter()
