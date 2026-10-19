@@ -30,6 +30,18 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertGreaterEqual(first, 0)
             self.assertGreater(second, first)
 
+    def test_copy_count_curriculum_covers_two_three_and_four_items(self):
+        records = MODULE.generate_format(300, 42, curriculum="copy_count")
+        self.assertEqual(len(records), 300)
+        observed_counts = set()
+        for record in records:
+            prompt, answer = MODULE.parse_instruction(record)
+            items = answer.split(",")
+            observed_counts.add(len(items))
+            self.assertIn(len(items), (2, 3, 4))
+            self.assertIn("、".join(items), prompt)
+        self.assertEqual(observed_counts, {2, 3, 4})
+
     def test_long_context_filter_refills_to_requested_count(self):
         records = MODULE.generate_long_context(
             20, 42, record_filter=lambda record: "杭州" in record)

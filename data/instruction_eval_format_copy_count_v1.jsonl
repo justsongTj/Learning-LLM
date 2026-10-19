@@ -1,0 +1,15 @@
+{"id":"copy_count_fruit_2","category":"format_copy_count","instruction":"候选水果依次为：香蕉、草莓、苹果、葡萄、梨、橙子。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"香蕉,草莓"}}
+{"id":"copy_count_fruit_3","category":"format_copy_count","instruction":"从列表梨、苹果、橙子、草莓、香蕉、葡萄中按原顺序选择前三项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"梨,苹果,橙子"}}
+{"id":"copy_count_fruit_4","category":"format_copy_count","instruction":"候选水果依次为：葡萄、橙子、草莓、梨、苹果、香蕉。请取前4项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"葡萄,橙子,草莓,梨"}}
+{"id":"copy_count_color_2","category":"format_copy_count","instruction":"从列表黄色、蓝色、橙色、红色、紫色、绿色中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"黄色,蓝色"}}
+{"id":"copy_count_color_3","category":"format_copy_count","instruction":"候选颜色依次为：绿色、紫色、红色、黄色、橙色、蓝色。请取前3项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"绿色,紫色,红色"}}
+{"id":"copy_count_color_4","category":"format_copy_count","instruction":"从列表蓝色、橙色、黄色、紫色、绿色、红色中按原顺序选择前四项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"蓝色,橙色,黄色,紫色"}}
+{"id":"copy_count_sport_2","category":"format_copy_count","instruction":"候选运动依次为：游泳、足球、跑步、羽毛球、骑行、篮球。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"游泳,足球"}}
+{"id":"copy_count_sport_3","category":"format_copy_count","instruction":"从列表骑行、羽毛球、篮球、游泳、足球、跑步中按原顺序选择前三项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"骑行,羽毛球,篮球"}}
+{"id":"copy_count_sport_4","category":"format_copy_count","instruction":"候选运动依次为：足球、篮球、游泳、骑行、跑步、羽毛球。请取前4项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"足球,篮球,游泳,骑行"}}
+{"id":"copy_count_instrument_2","category":"format_copy_count","instruction":"从列表钢琴、古筝、吉他、架子鼓、小提琴、长笛中按原顺序选择前两项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"钢琴,古筝"}}
+{"id":"copy_count_instrument_3","category":"format_copy_count","instruction":"候选乐器依次为：架子鼓、长笛、钢琴、吉他、古筝、小提琴。请取前3项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"架子鼓,长笛,钢琴"}}
+{"id":"copy_count_instrument_4","category":"format_copy_count","instruction":"从列表小提琴、吉他、古筝、钢琴、长笛、架子鼓中按原顺序选择前四项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"小提琴,吉他,古筝,钢琴"}}
+{"id":"copy_count_language_2","category":"format_copy_count","instruction":"候选编程语言依次为：Python、JavaScript、C++、Go、Rust、Java。请取前2项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"Python,JavaScript"}}
+{"id":"copy_count_language_3","category":"format_copy_count","instruction":"从列表C++、Rust、Java、Python、Go、JavaScript中按原顺序选择前三项，用英文逗号分隔，不要解释。","rule":{"type":"exact_text","value":"C++,Rust,Java"}}
+{"id":"copy_count_language_4","category":"format_copy_count","instruction":"候选编程语言依次为：Java、Go、JavaScript、Rust、Python、C++。请取前4项，使用英文逗号分隔，只输出结果。","rule":{"type":"exact_text","value":"Java,Go,JavaScript,Rust"}}

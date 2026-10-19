@@ -114,15 +114,17 @@ def generate_format(count: int, seed: int, excluded_prompts=None,
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
         candidates = randomizer.sample(pools[category], len(pools[category]))
-        if curriculum == "copy2":
+        if curriculum in ("copy2", "copy_count"):
+            item_count = 2 if curriculum == "copy2" else randomizer.choice((2, 3, 4))
+            chinese_count = {2: "两", 3: "三", 4: "四"}[item_count]
             prompt = randomizer.choice((
-                f"候选{category}依次为：{'、'.join(candidates)}。请取前2项，使用英文逗号分隔，只输出结果。",
-                f"从列表{'、'.join(candidates)}中按原顺序选择前两项，用英文逗号分隔，不要解释。",
+                f"候选{category}依次为：{'、'.join(candidates)}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
+                f"从列表{'、'.join(candidates)}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
             ))
             prompt_key = normalize(prompt)
             if prompt_key not in excluded_prompts:
                 records[prompt_key] = (
-                    f"指令:{prompt} 回答:{','.join(candidates[:2])}")
+                    f"指令:{prompt} 回答:{','.join(candidates[:item_count])}")
             continue
         item_count = randomizer.choice((2, 3, 4))
         values = candidates[:item_count]
@@ -240,7 +242,8 @@ def main() -> int:
     parser.add_argument("--math-count", type=int, default=500)
     parser.add_argument("--uncertainty-count", type=int, default=500)
     parser.add_argument("--format-count", type=int, default=500)
-    parser.add_argument("--format-curriculum", choices=("mixed", "copy2"),
+    parser.add_argument("--format-curriculum",
+                        choices=("mixed", "copy2", "copy_count"),
                         default="mixed")
     parser.add_argument("--long-context-count", type=int, default=500)
     parser.add_argument("--evaluation-file", action="append",
