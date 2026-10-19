@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
                      "[--resume checkpoint] [--resume-step value] [--checkpoint-interval value] "
                      "[--validation-text path] [--gradient-accumulation-steps value] "
                      "[--training-token-cache path] [--validation-token-cache path] "
-                     "[--answer-only-loss] [--overfit-one-batch] [--dcu]\n";
+                     "[--answer-only-loss] [--reset-optimizer] [--overfit-one-batch] [--dcu]\n";
         return 2;
     }
     try {
@@ -338,17 +338,23 @@ int main(int argc, char** argv) {
         std::int64_t resume_step = -1;
         bool overfit_one_batch = false;
         bool answer_only_loss = false;
+        bool reset_optimizer = false;
         bool use_dcu = false;
+        bool sequence_length_explicit = false;
         for (int i = 4; i < argc; ++i) {
             const std::string argument = argv[i];
             if (argument == "--dcu") use_dcu = true;
             else if (argument == "--overfit-one-batch") overfit_one_batch = true;
             else if (argument == "--answer-only-loss") answer_only_loss = true;
+            else if (argument == "--reset-optimizer") reset_optimizer = true;
             else if (argument == "--learning-rate" && i + 1 < argc) learning_rate = std::stof(argv[++i]);
             else if (argument == "--min-learning-rate" && i + 1 < argc) min_learning_rate = std::stof(argv[++i]);
             else if (argument == "--warmup-steps" && i + 1 < argc) warmup_steps = std::stoi(argv[++i]);
             else if (argument == "--validation-interval" && i + 1 < argc) validation_interval = std::stoi(argv[++i]);
-            else if (argument == "--sequence-length" && i + 1 < argc) sequence_length = std::stoi(argv[++i]);
+            else if (argument == "--sequence-length" && i + 1 < argc) {
+                sequence_length = std::stoi(argv[++i]);
+                sequence_length_explicit = true;
+            }
             else if (argument == "--channels" && i + 1 < argc) channels = std::stoi(argv[++i]);
             else if (argument == "--heads" && i + 1 < argc) heads = std::stoi(argv[++i]);
             else if (argument == "--layers" && i + 1 < argc) layers = std::stoi(argv[++i]);
@@ -390,7 +396,17 @@ int main(int argc, char** argv) {
         config.num_heads = heads;
         config.num_layers = layers;
         config.ffn_channels = ffn_channels;
-        if (!resume_path.empty()) config = tinydl::read_checkpoint_config(resume_path);
+        bool expanding_sequence = false;
+        if (!resume_path.empty()) {
+            config = tinydl::read_checkpoint_config(resume_path);
+            if (sequence_length_explicit) {
+                if (sequence_length < config.max_sequence_length)
+                    throw std::invalid_argument(
+                        "--sequence-length cannot shrink a resumed checkpoint");
+                expanding_sequence = sequence_length > config.max_sequence_length;
+                config.max_sequence_length = sequence_length;
+            }
+        }
 
         const auto corpus = load_or_encode_corpus(
             text_path, tokenizer_path, training_cache_path, tokenizer, answer_only_loss,
@@ -418,7 +434,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("training corpus has no records that fit the model context");
 
         tinydl::GptModel model(config, select_backend(use_dcu));//创建模型，使用什么后端
-        if (!resume_path.empty()) tinydl::load_checkpoint(model, resume_path);
+        if (!resume_path.empty())
+            tinydl::load_checkpoint(model, resume_path, expanding_sequence);
         tinydl::AdamWOptions optimizer_options;
         optimizer_options.learning_rate = learning_rate;
         tinydl::AdamW optimizer(model.named_parameters(), optimizer_options);//创建AdamW优化器把模型所有可训练参数交给 AdamW，让 AdamW 负责在反向传播后更新它们。
@@ -448,7 +465,17 @@ int main(int argc, char** argv) {
         std::uint64_t completed_steps = 0;
         if (!resume_path.empty()) {
             const std::string state_path = resume_path + ".state";
-            if (std::filesystem::exists(state_path)) {
+            if (reset_optimizer) {
+                if (resume_step < 0)
+                    throw std::runtime_error("--reset-optimizer requires --resume-step");
+                completed_steps = static_cast<std::uint64_t>(resume_step);
+                std::cout << "resumed model weights from step " << completed_steps
+                          << " with a fresh AdamW state\n";
+            } else if (expanding_sequence && std::filesystem::exists(state_path)) {
+                throw std::runtime_error(
+                    "sequence expansion changes optimizer state shapes; use "
+                    "--reset-optimizer with --resume-step");
+            } else if (std::filesystem::exists(state_path)) {
                 completed_steps = load_training_state(resume_path, optimizer, random);
                 if (resume_step >= 0 && static_cast<std::uint64_t>(resume_step) != completed_steps)
                     throw std::runtime_error("--resume-step does not match saved training state");

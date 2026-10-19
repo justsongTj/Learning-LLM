@@ -140,6 +140,10 @@ if(TINYDL_BUILD_TESTS)
     target_link_libraries(tinydl_autograd_tests PRIVATE tinydl)
     add_test(NAME tinydl_autograd_tests COMMAND tinydl_autograd_tests)
 
+    add_executable(tinydl_checkpoint_tests tests/test_checkpoint.cpp)
+    target_link_libraries(tinydl_checkpoint_tests PRIVATE tinydl)
+    add_test(NAME tinydl_checkpoint_tests COMMAND tinydl_checkpoint_tests)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME tinydl_instruction_corpus_tests

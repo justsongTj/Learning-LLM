@@ -1,5 +1,6 @@
 #include "tinydl/checkpoint.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fstream>
@@ -72,14 +73,17 @@ void save_checkpoint(GptModel& model, const std::string& path) {
     if (!stream) throw std::runtime_error("failed while writing checkpoint: " + path);
 }
 
-void load_checkpoint(GptModel& model, const std::string& path) {
+void load_checkpoint(GptModel& model, const std::string& path,
+                     bool allow_sequence_length_expansion) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) throw std::runtime_error("cannot open checkpoint: " + path);
     require_magic(stream);
     const GptConfig stored = read_config(stream);
     const GptConfig& expected = model.config();
+    const bool expanding_sequence = allow_sequence_length_expansion &&
+        expected.max_sequence_length > stored.max_sequence_length;
     if (stored.vocab_size != expected.vocab_size ||
-        stored.max_sequence_length != expected.max_sequence_length ||
+        (!expanding_sequence && stored.max_sequence_length != expected.max_sequence_length) ||
         stored.channels != expected.channels || stored.num_heads != expected.num_heads ||
         stored.num_layers != expected.num_layers || stored.ffn_channels != expected.ffn_channels)
         throw std::runtime_error("checkpoint model configuration does not match");
@@ -104,8 +108,20 @@ void load_checkpoint(GptModel& model, const std::string& path) {
         if (!stream) throw std::runtime_error("truncated parameter: " + name);
         const auto found = parameters.find(name);
         if (found == parameters.end()) throw std::runtime_error("unknown checkpoint parameter: " + name);
-        if (found->second->value().shape() != shape) throw std::runtime_error("shape mismatch: " + name);
-        found->second->value().copy_from(values);
+        const auto& expected_shape = found->second->value().shape();
+        if (expected_shape != shape) {
+            const bool expandable_position = expanding_sequence && name == "position_embedding.weight" &&
+                shape.size() == 2 && expected_shape.size() == 2 &&
+                shape[0] == static_cast<std::size_t>(stored.max_sequence_length) &&
+                expected_shape[0] == static_cast<std::size_t>(expected.max_sequence_length) &&
+                shape[1] == expected_shape[1];
+            if (!expandable_position) throw std::runtime_error("shape mismatch: " + name);
+            auto expanded = found->second->value().to_vector();
+            std::copy(values.begin(), values.end(), expanded.begin());
+            found->second->value().copy_from(expanded);
+        } else {
+            found->second->value().copy_from(values);
+        }
         parameters.erase(found);
     }
     if (!parameters.empty()) throw std::runtime_error("checkpoint is missing model parameters");

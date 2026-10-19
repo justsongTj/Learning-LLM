@@ -255,6 +255,25 @@ filtered using `--max-copy-similarity` (default 0.96), while the expanded reques
 check recognizes forms such as `写500字`, `一篇5000字`, and `篇幅不少于300字`.
 Fine-tune with `--answer-only-loss` and use `指令:<task> 回答:` at generation time.
 
+### Extend an existing checkpoint context
+
+TinyDL checkpoints use learned absolute position embeddings. To extend a 128-token checkpoint
+to 256 tokens, pass an explicit longer sequence length while resuming. Existing position rows
+are copied exactly and new rows keep their normal random initialization. Because the position
+parameter shape changes, start with a fresh optimizer state and provide the checkpoint step:
+
+```bash
+./build/tinydl_train corpus.txt tokenizer.model model-context-256.tdl 1000 \
+  --resume model-context-128.tdl \
+  --resume-step 50000 \
+  --sequence-length 256 \
+  --reset-optimizer
+```
+
+Sequence length expansion does not make old weights understand longer inputs immediately; the
+new position rows require continued language-model training on examples that actually use the
+extended context.
+
 Run the same small, version-controlled evaluation set for every checkpoint. Results are JSONL
 for later comparison; keyword pass is only a deterministic smoke metric, so factual accuracy,
 relevance, completeness, and instruction following still require review:
