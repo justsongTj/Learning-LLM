@@ -26,13 +26,22 @@ EXPLICIT_TASK_RE = re.compile(
     r"预测|什么|为什么|如何|怎么|哪些|谁|何时|何地)")
 COPY_NORMALIZE_RE = re.compile(r"[^0-9A-Za-z\u3400-\u4dbf\u4e00-\u9fff]+")
 TRAILING_INCOMPLETE = (",", "，", ":", "：", ";", "；")
+TEMPLATE_CONTAMINATION_RE = re.compile(r"(?:问题|指令|回答|预测|选择)\s*[:：]")
+QUOTED_SOURCE_RE = re.compile(r"[\"“](.{2,}?)[\"”]")
+SOURCE_AFTER_COLON_RE = re.compile(r"[:：]\s*(.{4,})$")
+REQUESTED_ITEMS_RE = re.compile(
+    r"(?:列出|给出|提供|写出|包含|包括)\s*([一二两三四五六七八九十\d]+)\s*(?:种|个|项|条|句)")
+CHINESE_NUMBERS = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
 CATEGORY_PATTERNS = (
-    ("math", re.compile(r"计算|等于|多少|[+×÷=]|\d+\s*[-*/+]\s*\d+")),
-    ("translation", re.compile(r"翻译|译成|英文|英语|中文")),
-    ("summarization", re.compile(r"总结|概括|摘要|一句话")),
-    ("rewriting", re.compile(r"改写|润色|书面语|纠正")),
-    ("format", re.compile(r"仅列|格式|JSON|表格|分隔|列出\s*[一二三四五六七八九十\d]+")),
-    ("uncertainty", re.compile(r"信息不足|无法确定|已知信息|不知道")),
+    ("translation", re.compile(r"翻译|译成")),
+    ("summarization", re.compile(r"总结|概括|摘要|提炼主旨")),
+    ("rewriting", re.compile(r"改写|润色|书面语|纠正|拼写检查|语法是否正确")),
+    ("format", re.compile(r"仅列|JSON|表格|使用.{0,8}分隔|列出\s*[一二两三四五六七八九十\d]+")),
+    ("uncertainty", re.compile(r"根据已知信息|信息不足|无法确定|能否确定|是否能够确定")),
+    ("math", re.compile(r"(?:计算|求值|算式|阶乘|方程|等于多少)|\d+\s*[+×÷*/]\s*\d+")),
     ("health", re.compile(r"健康|饮食|睡眠|运动|疾病|症状")),
     ("ai_ml", re.compile(r"人工智能|机器学习|深度学习|神经网络|计算机视觉|语言模型")),
 )
@@ -92,6 +101,30 @@ def classify_task(prompt: str) -> str:
     return "other"
 
 
+def requested_item_count(prompt: str) -> Optional[int]:
+    match = REQUESTED_ITEMS_RE.search(prompt)
+    if not match:
+        return None
+    value = match.group(1)
+    return int(value) if value.isdigit() else CHINESE_NUMBERS.get(value)
+
+
+def answer_item_count(answer: str) -> int:
+    numbered = re.findall(
+        r"(?:^|[\s;；。])(?:\d+|[一二三四五六七八九十])[.、)]\s*", answer)
+    if numbered:
+        return len(numbered)
+    return len([part for part in re.split(r"[,，;；、]", answer) if part.strip()])
+
+
+def has_task_source(prompt: str) -> bool:
+    quoted = QUOTED_SOURCE_RE.search(prompt)
+    if quoted and len(quoted.group(1).strip()) >= 3:
+        return True
+    after_colon = SOURCE_AFTER_COLON_RE.search(prompt)
+    return bool(after_colon and len(after_colon.group(1).strip()) >= 4)
+
+
 def rejection_reason(prompt: str, answer: str, args, reject_patterns) -> Optional[str]:
     if len(prompt) < args.min_prompt_chars:
         return "empty_or_short_prompt"
@@ -113,6 +146,15 @@ def rejection_reason(prompt: str, answer: str, args, reject_patterns) -> Optiona
         return "ambiguous_prompt"
     if args.reject_incomplete_ending and answer.endswith(TRAILING_INCOMPLETE):
         return "incomplete_ending"
+    if args.strict_task_quality:
+        if TEMPLATE_CONTAMINATION_RE.search(answer):
+            return "template_contamination"
+        category = classify_task(prompt)
+        if category in {"translation", "summarization", "rewriting"} and not has_task_source(prompt):
+            return "missing_task_source"
+        requested_items = requested_item_count(prompt)
+        if requested_items is not None and answer_item_count(answer) < requested_items:
+            return "requested_items_not_met"
     return None
 
 
@@ -166,6 +208,11 @@ def main() -> int:
                         help="reject prompts without a question or recognized task verb")
     parser.add_argument("--reject-incomplete-ending", action="store_true",
                         help="reject answers ending in a comma, colon, or semicolon")
+    parser.add_argument("--strict-task-quality", action="store_true",
+                        help="reject template leakage, missing task sources, and incomplete lists")
+    parser.add_argument("--include-category", action="append",
+                        choices=[name for name, _ in CATEGORY_PATTERNS] + ["knowledge", "other"],
+                        help="retain only selected task categories; may be repeated")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -244,6 +291,19 @@ def main() -> int:
                                     "answer": answer,
                                 }, ensure_ascii=False) + "\n")
                             continue
+                        category = classify_task(prompt)
+                        if args.include_category and category not in args.include_category:
+                            reasons["category_not_selected"] += 1
+                            if rejected_stream:
+                                rejected_stream.write(json.dumps({
+                                    "reason": "category_not_selected",
+                                    "source": filename,
+                                    "line": line_number,
+                                    "category": category,
+                                    "prompt": prompt,
+                                    "answer": answer,
+                                }, ensure_ascii=False) + "\n")
+                            continue
                         normalized = f"指令:{prompt} 回答:{answer}"
                         if tokenizer is not None:
                             special_tokens = int(tokenizer.bos_id() >= 0) + int(tokenizer.eos_id() >= 0)
@@ -284,7 +344,7 @@ def main() -> int:
                                     "answer": answer,
                                 }, ensure_ascii=False) + "\n")
                             continue
-                        category_counts[classify_task(prompt)] += 1
+                        category_counts[category] += 1
                         if stable_bucket(normalized, args.seed) < cutoff:
                             validation_stream.write(normalized + "\n")
                             validation_count += 1
@@ -322,6 +382,8 @@ def main() -> int:
             "max_copy_similarity": args.max_copy_similarity,
             "require_explicit_task": args.require_explicit_task,
             "reject_incomplete_ending": args.reject_incomplete_ending,
+            "strict_task_quality": args.strict_task_quality,
+            "include_categories": args.include_category,
             "seed": args.seed,
         },
     }

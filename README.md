@@ -221,9 +221,30 @@ python3 scripts/prepare_instruction_corpus.py \
   --rejected-output "$HOME/tujie/apps/datasets/corpus_zh_instruction_rejected.jsonl" \
   --reject-pattern-file "$HOME/tujie/apps/datasets/instruction_reject_patterns.txt" \
   --evaluation-file data/instruction_eval_zh.jsonl \
+  --tokenizer-model "$HOME/tujie/apps/tinydl-artifacts/tokenizer_zh_8k_eos.model" \
+  --max-tokens 128 \
   --reject-incomplete-ending \
-  --require-explicit-task
+  --require-explicit-task \
+  --strict-task-quality
 ```
+
+For a narrow, auditable SFT experiment, repeat `--include-category` to keep only selected
+task families. For example, the following excludes open-ended `other`, health, and AI-topic
+records:
+
+```bash
+  --include-category translation \
+  --include-category summarization \
+  --include-category rewriting \
+  --include-category format \
+  --include-category uncertainty
+```
+
+Strict task-quality checks reject answer-side template labels such as `问题:` and `预测:`,
+translation/summarization/rewriting prompts without identifiable source text, and responses
+that provide fewer items than explicitly requested. These structural checks do not prove
+factual correctness; arithmetic and knowledge records still require a verified source or a
+task-specific validator before training.
 
 Keep encyclopedia text in a separate pretraining file. Review the JSON report and random
 samples before training; automatic rules deliberately do not claim to prove factual accuracy.
