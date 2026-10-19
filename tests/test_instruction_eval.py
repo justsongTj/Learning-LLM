@@ -12,6 +12,11 @@ SPEC.loader.exec_module(MODULE)
 
 
 class InstructionEvaluationTest(unittest.TestCase):
+    def test_extracts_normalized_prompt_echo(self):
+        prompt = "指令:根据已知信息回答：小吴有一台电脑。 回答:"
+        generated = "指令:根据已知信息回答:小吴有一台电脑。 回答: 无法确定。"
+        self.assertEqual(MODULE.extract_answer(generated, prompt), "无法确定。")
+
     def test_exact_number_rejects_keyword_collision(self):
         case = {"rule": {"type": "exact_number", "value": 35}}
         self.assertTrue(MODULE.evaluate_answer(case, "35")[2])

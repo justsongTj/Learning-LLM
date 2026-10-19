@@ -10,6 +10,16 @@ import sys
 from pathlib import Path
 
 
+def extract_answer(generated, prompt):
+    text = generated.strip()
+    if text.startswith(prompt):
+        return text[len(prompt):].strip()
+    markers = list(re.finditer(r"回答\s*[:：]", text))
+    if markers and re.search(r"指令\s*[:：]", text[:markers[-1].start()]):
+        return text[markers[-1].end():].strip()
+    return text
+
+
 def evaluate_answer(case, answer):
     checks = {}
     expected = case.get("expected_keywords", [])
@@ -77,7 +87,7 @@ def main() -> int:
                 command, check=True, capture_output=True, text=True,
                 encoding="utf-8", env=environment)
             generated = completed.stdout.strip()
-            answer = generated[len(prompt):].strip() if generated.startswith(prompt) else generated
+            answer = extract_answer(generated, prompt)
             matched, checks, passed = evaluate_answer(case, answer)
             result = dict(case)
             result.update({
