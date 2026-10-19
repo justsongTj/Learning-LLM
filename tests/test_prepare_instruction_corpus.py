@@ -68,6 +68,8 @@ class PrepareInstructionCorpusTest(unittest.TestCase):
             self.assertEqual(report["counts"]["near_copied_answer"], 1)
             self.assertEqual(report["counts"]["ambiguous_prompt"], 1)
             self.assertEqual(report["counts"]["evaluation_prompt_excluded"], 1)
+            self.assertGreater(report["category_counts"]["knowledge"], 0)
+            self.assertGreater(report["category_counts"]["other"], 0)
             rejected_reasons = {
                 json.loads(line)["reason"]
                 for line in rejected.read_text(encoding="utf-8").splitlines()

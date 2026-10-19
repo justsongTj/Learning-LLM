@@ -4,9 +4,37 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+
+def evaluate_answer(case, answer):
+    checks = {}
+    expected = case.get("expected_keywords", [])
+    matched = [keyword for keyword in expected if keyword.lower() in answer.lower()]
+    if expected:
+        checks["all_keywords"] = len(matched) == len(expected)
+
+    rule = case.get("rule", {})
+    rule_type = rule.get("type")
+    if rule_type == "exact_number":
+        numbers = re.findall(r"(?<![\d.])-?\d+(?:\.\d+)?", answer)
+        checks["exact_number"] = numbers == [str(rule["value"])]
+    elif rule_type == "delimited_list":
+        items = [item.strip() for item in re.split(rule.get("separator", r"[,，]"), answer)
+                 if item.strip()]
+        checks["delimited_list"] = len(items) == int(rule["count"])
+    elif rule_type == "contains_any":
+        checks["contains_any"] = any(
+            value.lower() in answer.lower() for value in rule.get("values", []))
+    elif rule_type == "regex":
+        checks["regex"] = re.search(rule["pattern"], answer, re.IGNORECASE) is not None
+    elif rule_type:
+        raise ValueError(f"unknown evaluation rule type: {rule_type}")
+
+    return matched, checks, bool(checks) and all(checks.values())
 
 
 def main() -> int:
@@ -50,22 +78,23 @@ def main() -> int:
                 encoding="utf-8", env=environment)
             generated = completed.stdout.strip()
             answer = generated[len(prompt):].strip() if generated.startswith(prompt) else generated
-            expected = case.get("expected_keywords", [])
-            matched = [keyword for keyword in expected if keyword.lower() in answer.lower()]
+            matched, checks, passed = evaluate_answer(case, answer)
             result = dict(case)
             result.update({
                 "prompt": prompt,
                 "answer": answer,
                 "matched_keywords": matched,
-                "keyword_pass": bool(expected) and len(matched) == len(expected),
+                "keyword_pass": checks.get("all_keywords", False),
+                "checks": checks,
+                "pass": passed,
             })
             destination.write(json.dumps(result, ensure_ascii=False) + "\n")
             total += 1
-            keyword_passes += int(result["keyword_pass"])
+            keyword_passes += int(result["pass"])
             print(f"[{line_number}] {case['id']}: {answer}")
 
     print(f"wrote {total} results to {output_path}; "
-          f"strict keyword pass {keyword_passes}/{total}")
+          f"strict rule pass {keyword_passes}/{total}")
     return 0
 
 

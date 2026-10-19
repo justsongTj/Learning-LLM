@@ -26,6 +26,16 @@ EXPLICIT_TASK_RE = re.compile(
     r"预测|什么|为什么|如何|怎么|哪些|谁|何时|何地)")
 COPY_NORMALIZE_RE = re.compile(r"[^0-9A-Za-z\u3400-\u4dbf\u4e00-\u9fff]+")
 TRAILING_INCOMPLETE = (",", "，", ":", "：", ";", "；")
+CATEGORY_PATTERNS = (
+    ("math", re.compile(r"计算|等于|多少|[+×÷=]|\d+\s*[-*/+]\s*\d+")),
+    ("translation", re.compile(r"翻译|译成|英文|英语|中文")),
+    ("summarization", re.compile(r"总结|概括|摘要|一句话")),
+    ("rewriting", re.compile(r"改写|润色|书面语|纠正")),
+    ("format", re.compile(r"仅列|格式|JSON|表格|分隔|列出\s*[一二三四五六七八九十\d]+")),
+    ("uncertainty", re.compile(r"信息不足|无法确定|已知信息|不知道")),
+    ("health", re.compile(r"健康|饮食|睡眠|运动|疾病|症状")),
+    ("ai_ml", re.compile(r"人工智能|机器学习|深度学习|神经网络|计算机视觉|语言模型")),
+)
 
 
 def normalize(value: str) -> str:
@@ -71,6 +81,15 @@ def copy_similarity(prompt: str, answer: str) -> float:
     if min(len(prompt_key), len(answer_key)) < 20:
         return 0.0
     return SequenceMatcher(None, prompt_key, answer_key, autojunk=False).ratio()
+
+
+def classify_task(prompt: str) -> str:
+    for category, pattern in CATEGORY_PATTERNS:
+        if pattern.search(prompt):
+            return category
+    if re.search(r"什么是|为什么|谁|何时|何地|哪些", prompt):
+        return "knowledge"
+    return "other"
 
 
 def rejection_reason(prompt: str, answer: str, args, reject_patterns) -> Optional[str]:
@@ -135,6 +154,10 @@ def main() -> int:
     parser.add_argument("--min-prompt-chars", type=int, default=2)
     parser.add_argument("--min-answer-chars", type=int, default=8)
     parser.add_argument("--max-chars", type=int, default=2000)
+    parser.add_argument("--tokenizer-model",
+                        help="SentencePiece model used to reject records exceeding model context")
+    parser.add_argument("--max-tokens", type=int,
+                        help="maximum input tokens; includes BOS and predicts through EOS")
     parser.add_argument("--requested-length-ratio", type=float, default=0.5,
                         help="minimum answer/requested character ratio")
     parser.add_argument("--max-copy-similarity", type=float, default=0.96,
@@ -152,6 +175,10 @@ def main() -> int:
         parser.error("minimum lengths must be positive")
     if args.max_chars <= args.min_prompt_chars + args.min_answer_chars:
         parser.error("max-chars is too small")
+    if (args.tokenizer_model is None) != (args.max_tokens is None):
+        parser.error("--tokenizer-model and --max-tokens must be used together")
+    if args.max_tokens is not None and args.max_tokens <= 1:
+        parser.error("max-tokens must be greater than one")
     if not 0.0 <= args.requested_length_ratio <= 1.0:
         parser.error("requested-length-ratio must be between 0 and 1")
     if not 0.0 < args.max_copy_similarity <= 1.0:
@@ -175,8 +202,17 @@ def main() -> int:
     evaluation_prompts = load_evaluation_prompts(args.evaluation_file)
     cutoff = int(args.validation_ratio * 10_000)
     reasons = Counter()
+    category_counts = Counter()
     seen = set()
     train_count = validation_count = 0
+    tokenizer = None
+    if args.tokenizer_model:
+        try:
+            import sentencepiece as spm
+        except ImportError as error:
+            raise RuntimeError(
+                "sentencepiece Python package is required with --tokenizer-model") from error
+        tokenizer = spm.SentencePieceProcessor(model_file=args.tokenizer_model)
 
     try:
         with ExitStack() as stack:
@@ -209,6 +245,21 @@ def main() -> int:
                                 }, ensure_ascii=False) + "\n")
                             continue
                         normalized = f"指令:{prompt} 回答:{answer}"
+                        if tokenizer is not None:
+                            special_tokens = int(tokenizer.bos_id() >= 0) + int(tokenizer.eos_id() >= 0)
+                            token_count = len(tokenizer.encode(normalized, out_type=int)) + special_tokens
+                            if token_count > args.max_tokens + 1:
+                                reasons["too_many_tokens"] += 1
+                                if rejected_stream:
+                                    rejected_stream.write(json.dumps({
+                                        "reason": "too_many_tokens",
+                                        "source": filename,
+                                        "line": line_number,
+                                        "token_count": token_count,
+                                        "prompt": prompt,
+                                        "answer": answer,
+                                    }, ensure_ascii=False) + "\n")
+                                continue
                         fingerprint = hashlib.sha256(normalized.encode("utf-8")).digest()
                         if fingerprint in seen:
                             reasons["exact_duplicate"] += 1
@@ -233,6 +284,7 @@ def main() -> int:
                                     "answer": answer,
                                 }, ensure_ascii=False) + "\n")
                             continue
+                        category_counts[classify_task(prompt)] += 1
                         if stable_bucket(normalized, args.seed) < cutoff:
                             validation_stream.write(normalized + "\n")
                             validation_count += 1
@@ -257,12 +309,15 @@ def main() -> int:
         "train_records": train_count,
         "validation_records": validation_count,
         "accepted_records": train_count + validation_count,
+        "category_counts": dict(sorted(category_counts.items())),
         "counts": dict(sorted(reasons.items())),
         "configuration": {
             "validation_ratio": args.validation_ratio,
             "min_prompt_chars": args.min_prompt_chars,
             "min_answer_chars": args.min_answer_chars,
             "max_chars": args.max_chars,
+            "tokenizer_model": args.tokenizer_model,
+            "max_tokens": args.max_tokens,
             "requested_length_ratio": args.requested_length_ratio,
             "max_copy_similarity": args.max_copy_similarity,
             "require_explicit_task": args.require_explicit_task,

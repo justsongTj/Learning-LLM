@@ -145,5 +145,8 @@ if(TINYDL_BUILD_TESTS)
         add_test(NAME tinydl_instruction_corpus_tests
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_prepare_instruction_corpus.py)
+        add_test(NAME tinydl_instruction_eval_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_instruction_eval.py)
     endif()
 endif()

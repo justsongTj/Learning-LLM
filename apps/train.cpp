@@ -21,7 +21,7 @@
 namespace {
 
 constexpr std::array<char, 8> training_magic{{'T', 'D', 'L', 'T', 'R', 'N', '0', '1'}};
-constexpr std::array<char, 8> corpus_magic{{'T', 'D', 'L', 'C', 'R', 'P', '0', '1'}};
+constexpr std::array<char, 8> corpus_magic{{'T', 'D', 'L', 'C', 'R', 'P', '0', '2'}};
 
 template <typename T>
 void write_value(std::ostream& stream, const T& value) {
@@ -75,7 +75,10 @@ std::uint64_t load_training_state(const std::string& model_path, tinydl::AdamW& 
 struct EncodedCorpus {
     std::vector<int> tokens;
     std::vector<std::uint8_t> loss_weights;
+    std::vector<std::uint64_t> record_starts;
+    std::vector<std::uint64_t> record_lengths;
     std::size_t instruction_paragraphs{0};
+    std::size_t overlong_paragraphs{0};
 };
 
 struct FileSignature {
@@ -91,7 +94,7 @@ FileSignature file_signature(const std::string& path) {
 
 void save_corpus_cache(const std::string& cache_path, const std::string& text_path,
                        const std::string& tokenizer_path, bool answer_only_loss,
-                       const EncodedCorpus& corpus) {
+                       int maximum_sequence_length, const EncodedCorpus& corpus) {
     static_assert(sizeof(int) == sizeof(std::int32_t));
     const std::string temporary_path = cache_path + ".part";
     std::ofstream stream(temporary_path, std::ios::binary | std::ios::trunc);
@@ -104,12 +107,19 @@ void save_corpus_cache(const std::string& cache_path, const std::string& text_pa
     write_value(stream, tokenizer.size);
     write_value(stream, tokenizer.modified);
     write_value(stream, static_cast<std::uint8_t>(answer_only_loss));
+    write_value(stream, static_cast<std::int32_t>(maximum_sequence_length));
     write_value(stream, static_cast<std::uint64_t>(corpus.instruction_paragraphs));
+    write_value(stream, static_cast<std::uint64_t>(corpus.overlong_paragraphs));
     write_value(stream, static_cast<std::uint64_t>(corpus.tokens.size()));
+    write_value(stream, static_cast<std::uint64_t>(corpus.record_starts.size()));
     stream.write(reinterpret_cast<const char*>(corpus.tokens.data()),
                  static_cast<std::streamsize>(corpus.tokens.size() * sizeof(int)));
     stream.write(reinterpret_cast<const char*>(corpus.loss_weights.data()),
                  static_cast<std::streamsize>(corpus.loss_weights.size()));
+    stream.write(reinterpret_cast<const char*>(corpus.record_starts.data()),
+                 static_cast<std::streamsize>(corpus.record_starts.size() * sizeof(std::uint64_t)));
+    stream.write(reinterpret_cast<const char*>(corpus.record_lengths.data()),
+                 static_cast<std::streamsize>(corpus.record_lengths.size() * sizeof(std::uint64_t)));
     if (!stream) throw std::runtime_error("failed while writing corpus cache: " + temporary_path);
     stream.close();
     std::error_code error;
@@ -121,7 +131,7 @@ void save_corpus_cache(const std::string& cache_path, const std::string& text_pa
 
 bool load_corpus_cache(const std::string& cache_path, const std::string& text_path,
                        const std::string& tokenizer_path, bool answer_only_loss,
-                       EncodedCorpus& corpus) {
+                       int maximum_sequence_length, EncodedCorpus& corpus) {
     std::ifstream stream(cache_path, std::ios::binary);
     if (!stream) return false;
     std::array<char, 8> magic{};
@@ -132,31 +142,43 @@ bool load_corpus_cache(const std::string& cache_path, const std::string& text_pa
     const auto tokenizer_size = read_value<std::uint64_t>(stream);
     const auto tokenizer_modified = read_value<std::int64_t>(stream);
     const auto cached_answer_only = read_value<std::uint8_t>(stream);
+    const auto cached_maximum_sequence_length = read_value<std::int32_t>(stream);
     const auto instruction_paragraphs = read_value<std::uint64_t>(stream);
+    const auto overlong_paragraphs = read_value<std::uint64_t>(stream);
     const auto token_count = read_value<std::uint64_t>(stream);
+    const auto record_count = read_value<std::uint64_t>(stream);
     const auto text = file_signature(text_path);
     const auto tokenizer = file_signature(tokenizer_path);
     if (text_size != text.size || text_modified != text.modified ||
         tokenizer_size != tokenizer.size || tokenizer_modified != tokenizer.modified ||
-        cached_answer_only != static_cast<std::uint8_t>(answer_only_loss))
+        cached_answer_only != static_cast<std::uint8_t>(answer_only_loss) ||
+        cached_maximum_sequence_length != maximum_sequence_length)
         return false;
     const auto cache_size = std::filesystem::file_size(cache_path);
-    constexpr std::uint64_t header_size = 8 + 8 + 8 + 8 + 8 + 1 + 8 + 8;
-    const std::uint64_t expected_size = header_size + token_count * (sizeof(int) + 1);
-    if (token_count == 0 || cache_size != expected_size) return false;
+    constexpr std::uint64_t header_size = 8 + 8 + 8 + 8 + 8 + 1 + 4 + 8 + 8 + 8 + 8;
+    const std::uint64_t expected_size = header_size + token_count * (sizeof(int) + 1) +
+        record_count * 2 * sizeof(std::uint64_t);
+    if (token_count == 0 || record_count == 0 || cache_size != expected_size) return false;
     corpus.tokens.resize(static_cast<std::size_t>(token_count));
     corpus.loss_weights.resize(static_cast<std::size_t>(token_count));
+    corpus.record_starts.resize(static_cast<std::size_t>(record_count));
+    corpus.record_lengths.resize(static_cast<std::size_t>(record_count));
     corpus.instruction_paragraphs = static_cast<std::size_t>(instruction_paragraphs);
+    corpus.overlong_paragraphs = static_cast<std::size_t>(overlong_paragraphs);
     stream.read(reinterpret_cast<char*>(corpus.tokens.data()),
                 static_cast<std::streamsize>(corpus.tokens.size() * sizeof(int)));
     stream.read(reinterpret_cast<char*>(corpus.loss_weights.data()),
                 static_cast<std::streamsize>(corpus.loss_weights.size()));
+    stream.read(reinterpret_cast<char*>(corpus.record_starts.data()),
+                static_cast<std::streamsize>(corpus.record_starts.size() * sizeof(std::uint64_t)));
+    stream.read(reinterpret_cast<char*>(corpus.record_lengths.data()),
+                static_cast<std::streamsize>(corpus.record_lengths.size() * sizeof(std::uint64_t)));
     return static_cast<bool>(stream);
 }
 
 EncodedCorpus encode_corpus(const std::string& path,
                             const tinydl::SentencePieceTokenizer& tokenizer,
-                            bool answer_only_loss) {
+                            bool answer_only_loss, int maximum_sequence_length) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) throw std::runtime_error("cannot open training text: " + path);
     if (tokenizer.eos_id() < 0)
@@ -175,26 +197,36 @@ EncodedCorpus encode_corpus(const std::string& path,
             marker_size = full_width_marker.size();
         }
 
+        std::vector<int> record_tokens;
+        std::vector<std::uint8_t> record_weights;
         if (tokenizer.bos_id() >= 0) {
-            result.tokens.push_back(tokenizer.bos_id());
-            result.loss_weights.push_back(answer_position == std::string::npos ? 1.0f : 0.0f);
+            record_tokens.push_back(tokenizer.bos_id());
+            record_weights.push_back(answer_position == std::string::npos ? 1 : 0);
         }
         if (answer_position == std::string::npos) {
             auto encoded = tokenizer.encode(line);
-            result.tokens.insert(result.tokens.end(), encoded.begin(), encoded.end());
-            result.loss_weights.insert(result.loss_weights.end(), encoded.size(), 1.0f);
+            record_tokens.insert(record_tokens.end(), encoded.begin(), encoded.end());
+            record_weights.insert(record_weights.end(), encoded.size(), 1);
         } else {
             const std::size_t answer_begin = answer_position + marker_size;
             auto prefix = tokenizer.encode(line.substr(0, answer_begin));
             auto answer = tokenizer.encode(line.substr(answer_begin));
-            result.tokens.insert(result.tokens.end(), prefix.begin(), prefix.end());
-            result.loss_weights.insert(result.loss_weights.end(), prefix.size(), 0.0f);
-            result.tokens.insert(result.tokens.end(), answer.begin(), answer.end());
-            result.loss_weights.insert(result.loss_weights.end(), answer.size(), 1.0f);
-            ++result.instruction_paragraphs;
+            record_tokens.insert(record_tokens.end(), prefix.begin(), prefix.end());
+            record_weights.insert(record_weights.end(), prefix.size(), 0);
+            record_tokens.insert(record_tokens.end(), answer.begin(), answer.end());
+            record_weights.insert(record_weights.end(), answer.size(), 1);
         }
-        result.tokens.push_back(tokenizer.eos_id());
-        result.loss_weights.push_back(1.0f);
+        record_tokens.push_back(tokenizer.eos_id());
+        record_weights.push_back(1);
+        if (record_tokens.size() > static_cast<std::size_t>(maximum_sequence_length + 1)) {
+            ++result.overlong_paragraphs;
+            continue;
+        }
+        result.record_starts.push_back(static_cast<std::uint64_t>(result.tokens.size()));
+        result.record_lengths.push_back(static_cast<std::uint64_t>(record_tokens.size()));
+        result.tokens.insert(result.tokens.end(), record_tokens.begin(), record_tokens.end());
+        result.loss_weights.insert(result.loss_weights.end(), record_weights.begin(), record_weights.end());
+        if (answer_position != std::string::npos) ++result.instruction_paragraphs;
     }
     if (!stream.eof()) throw std::runtime_error("failed while reading training text: " + path);
     return result;
@@ -204,12 +236,12 @@ EncodedCorpus load_or_encode_corpus(const std::string& text_path,
                                     const std::string& tokenizer_path,
                                     const std::string& cache_path,
                                     const tinydl::SentencePieceTokenizer& tokenizer,
-                                    bool answer_only_loss) {
+                                    bool answer_only_loss, int maximum_sequence_length) {
     EncodedCorpus corpus;
     if (!cache_path.empty()) {
         try {
             if (load_corpus_cache(cache_path, text_path, tokenizer_path,
-                                  answer_only_loss, corpus)) {
+                                  answer_only_loss, maximum_sequence_length, corpus)) {
                 std::cout << "loaded token cache " << cache_path << " ("
                           << corpus.tokens.size() << " tokens)\n";
                 return corpus;
@@ -220,9 +252,10 @@ EncodedCorpus load_or_encode_corpus(const std::string& text_path,
                       << ": " << error.what() << '\n';
         }
     }
-    corpus = encode_corpus(text_path, tokenizer, answer_only_loss);
+    corpus = encode_corpus(text_path, tokenizer, answer_only_loss, maximum_sequence_length);
     if (!cache_path.empty()) {
-        save_corpus_cache(cache_path, text_path, tokenizer_path, answer_only_loss, corpus);
+        save_corpus_cache(cache_path, text_path, tokenizer_path, answer_only_loss,
+                          maximum_sequence_length, corpus);
         std::cout << "saved token cache " << cache_path << " (" << corpus.tokens.size()
                   << " tokens)\n";
     }
@@ -233,20 +266,29 @@ std::shared_ptr<tinydl::Backend> select_backend(bool use_dcu) {
     return use_dcu ? tinydl::make_dcu_backend() : tinydl::make_cpu_backend();
 }
 
-float evaluate(tinydl::GptModel& model, const EncodedCorpus& corpus,
-               std::size_t begin, int sequence_length) {
-    constexpr std::size_t max_samples = 32;
-    const std::size_t length = static_cast<std::size_t>(sequence_length);
-    if (begin + length >= corpus.tokens.size()) return 0.0f;
+std::vector<std::size_t> eligible_records(const EncodedCorpus& corpus,
+                                          std::size_t begin, std::size_t end) {
+    std::vector<std::size_t> records;
+    for (std::size_t index = 0; index < corpus.record_starts.size(); ++index) {
+        const auto start = static_cast<std::size_t>(corpus.record_starts[index]);
+        const auto length = static_cast<std::size_t>(corpus.record_lengths[index]);
+        if (length >= 2 && start >= begin && start + length <= end) records.push_back(index);
+    }
+    return records;
+}
 
-    const std::size_t available_starts = corpus.tokens.size() - begin - length;
-    const std::size_t candidate_count = std::min(max_samples, available_starts);
+float evaluate_records(tinydl::GptModel& model, const EncodedCorpus& corpus,
+                       const std::vector<std::size_t>& records) {
+    constexpr std::size_t max_samples = 32;
+    if (records.empty()) return 0.0f;
+    const std::size_t sample_count = std::min(max_samples, records.size());
     float total = 0.0f;
-    std::size_t samples = 0;
-    for (std::size_t candidate = 0; candidate < candidate_count; ++candidate) {
-        const std::size_t relative_start = candidate_count == 1
-            ? 0 : candidate * (available_starts - 1) / (candidate_count - 1);
-        const std::size_t start = begin + relative_start;
+    for (std::size_t sample = 0; sample < sample_count; ++sample) {
+        const std::size_t position = sample_count == 1
+            ? 0 : sample * (records.size() - 1) / (sample_count - 1);
+        const std::size_t record = records[position];
+        const std::size_t start = static_cast<std::size_t>(corpus.record_starts[record]);
+        const std::size_t length = static_cast<std::size_t>(corpus.record_lengths[record]) - 1;
         std::vector<int> input(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start),
                                corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + length));
         std::vector<int> target(corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + 1),
@@ -254,12 +296,9 @@ float evaluate(tinydl::GptModel& model, const EncodedCorpus& corpus,
         std::vector<float> weights(
             corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + 1),
             corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + length + 1));
-        if (std::none_of(weights.begin(), weights.end(), [](float value) { return value > 0.0f; }))
-            continue;
         total += tinydl::cross_entropy(model.forward(input), target, weights).value().to_vector()[0];
-        ++samples;
     }
-    return samples == 0 ? 0.0f : total / static_cast<float>(samples);
+    return total / static_cast<float>(sample_count);
 }
 
 }  // namespace
@@ -343,13 +382,23 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("model dimensions must be positive and channels divisible by heads");
 
         tinydl::SentencePieceTokenizer tokenizer(tokenizer_path);
-        // Encode each paragraph independently and preserve its boundary with BOS/EOS.
+        // Resolve the model context before encoding so records that cannot fit are rejected.
+        tinydl::GptConfig config;
+        config.vocab_size = tokenizer.vocabulary_size();
+        config.max_sequence_length = sequence_length;
+        config.channels = channels;
+        config.num_heads = heads;
+        config.num_layers = layers;
+        config.ffn_channels = ffn_channels;
+        if (!resume_path.empty()) config = tinydl::read_checkpoint_config(resume_path);
+
         const auto corpus = load_or_encode_corpus(
-            text_path, tokenizer_path, training_cache_path, tokenizer, answer_only_loss);
+            text_path, tokenizer_path, training_cache_path, tokenizer, answer_only_loss,
+            config.max_sequence_length);
         const auto external_validation = validation_path.empty()
             ? EncodedCorpus{} : load_or_encode_corpus(
                 validation_path, tokenizer_path, validation_cache_path,
-                tokenizer, answer_only_loss);
+                tokenizer, answer_only_loss, config.max_sequence_length);
         if (answer_only_loss) {
             if (corpus.instruction_paragraphs == 0)
                 throw std::runtime_error(
@@ -361,17 +410,12 @@ int main(int argc, char** argv) {
                           << " validation paragraphs";
             std::cout << '\n';
         }
-        //定义要训练的GPT模型结构
-        tinydl::GptConfig config;
-        config.vocab_size = tokenizer.vocabulary_size();
-        config.max_sequence_length = sequence_length;
-        config.channels = channels;
-        config.num_heads = heads;
-        config.num_layers = layers;
-        config.ffn_channels = ffn_channels;
-        if (!resume_path.empty()) config = tinydl::read_checkpoint_config(resume_path);
-        if (corpus.tokens.size() <= static_cast<std::size_t>(config.max_sequence_length))
-            throw std::runtime_error("training text is shorter than one sequence");
+        std::cout << "record-aware corpus: " << corpus.record_starts.size()
+                  << " accepted, " << corpus.overlong_paragraphs
+                  << " rejected for exceeding " << config.max_sequence_length
+                  << " input tokens\n";
+        if (corpus.record_starts.empty())
+            throw std::runtime_error("training corpus has no records that fit the model context");
 
         tinydl::GptModel model(config, select_backend(use_dcu));//创建模型，使用什么后端
         if (!resume_path.empty()) tinydl::load_checkpoint(model, resume_path);
@@ -379,33 +423,27 @@ int main(int argc, char** argv) {
         optimizer_options.learning_rate = learning_rate;
         tinydl::AdamW optimizer(model.named_parameters(), optimizer_options);//创建AdamW优化器把模型所有可训练参数交给 AdamW，让 AdamW 负责在反向传播后更新它们。
         std::mt19937 random(42);//随机数生成器，用来随机选择训练语料片段的位置
-        const std::size_t minimum_split = static_cast<std::size_t>(config.max_sequence_length + 1);
-        const std::size_t validation_size = std::max(minimum_split, corpus.tokens.size() / 20);
-        if (!overfit_one_batch && validation_path.empty() &&
-            corpus.tokens.size() <= validation_size + minimum_split)
-            throw std::runtime_error("training text is too short for a training/validation split");
-        if (!overfit_one_batch && !validation_path.empty() &&
-            external_validation.tokens.size() <= minimum_split)
-            throw std::runtime_error("validation text is shorter than one sequence");
-        const std::size_t training_end = overfit_one_batch || !validation_path.empty()
-            ? corpus.tokens.size() : corpus.tokens.size() - validation_size;
-        std::uniform_int_distribution<std::size_t> start_distribution(
-            0, training_end - static_cast<std::size_t>(config.max_sequence_length) - 1);//定义随机起点范围 从tokenizer编码后的语料中随机选择一个起点，截取长度为max_sequence_length的片段作为训练样本
-        std::size_t overfit_start = 0;
-        if (overfit_one_batch && answer_only_loss) {
-            const std::size_t length = static_cast<std::size_t>(config.max_sequence_length);
-            while (overfit_start + length < training_end) {
-                const auto weights_begin = corpus.loss_weights.begin() +
-                    static_cast<std::ptrdiff_t>(overfit_start + 1);
-                if (std::any_of(weights_begin, weights_begin + length,
-                                [](float value) { return value > 0.0f; }))
-                    break;
-                ++overfit_start;
+        std::vector<std::size_t> training_records;
+        std::vector<std::size_t> validation_records;
+        if (overfit_one_batch || !validation_path.empty()) {
+            training_records = eligible_records(corpus, 0, corpus.tokens.size());
+        } else {
+            if (corpus.record_starts.size() < 2)
+                throw std::runtime_error("training text needs at least two records for an internal split");
+            const std::size_t training_count = std::max<std::size_t>(
+                1, corpus.record_starts.size() - std::max<std::size_t>(1, corpus.record_starts.size() / 20));
+            for (std::size_t index = 0; index < corpus.record_starts.size(); ++index) {
+                (index < training_count ? training_records : validation_records).push_back(index);
             }
-            if (overfit_start + length >= training_end)
-                throw std::runtime_error(
-                    "could not find an overfit sequence with answer tokens");
         }
+        if (!validation_path.empty())
+            validation_records = eligible_records(
+                external_validation, 0, external_validation.tokens.size());
+        if (training_records.empty()) throw std::runtime_error("no eligible training records");
+        if (!overfit_one_batch && validation_records.empty())
+            throw std::runtime_error("no eligible validation records");
+        std::uniform_int_distribution<std::size_t> record_distribution(
+            0, training_records.size() - 1);
 
         std::uint64_t completed_steps = 0;
         if (!resume_path.empty()) {
@@ -420,7 +458,7 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("resume checkpoint has no .state file; provide --resume-step");
                 completed_steps = static_cast<std::uint64_t>(resume_step);
                 for (std::uint64_t i = 0; i < completed_steps; ++i)
-                    static_cast<void>(start_distribution(random));
+                    static_cast<void>(record_distribution(random));
                 std::cout << "resumed model weights from step " << completed_steps
                           << " with a fresh AdamW state\n";
             }
@@ -442,7 +480,7 @@ int main(int argc, char** argv) {
         constexpr float pi = 3.14159265358979323846f;
         const int actual_warmup_steps = std::min(warmup_steps, std::max(0, steps / 10));
         auto throughput_start = std::chrono::steady_clock::now();
-        int throughput_steps = 0;
+        std::size_t throughput_tokens = 0;
         for (int step = 1; step <= steps; ++step)
         {
             const std::uint64_t global_step = completed_steps + static_cast<std::uint64_t>(step);
@@ -460,40 +498,30 @@ int main(int argc, char** argv) {
             optimizer.zero_grad();
             float loss_value = 0.0f;
             for (int micro_step = 0; micro_step < gradient_accumulation_steps; ++micro_step) {
-                std::size_t start = overfit_one_batch ? overfit_start : start_distribution(random);
-                if (answer_only_loss && !overfit_one_batch) {
-                    for (int attempt = 0; attempt < 1024; ++attempt) {
-                        const auto weights_begin = corpus.loss_weights.begin() +
-                            static_cast<std::ptrdiff_t>(start + 1);
-                        if (std::any_of(weights_begin,
-                                        weights_begin + config.max_sequence_length,
-                                        [](float value) { return value > 0.0f; }))
-                            break;
-                        start = start_distribution(random);
-                        if (attempt == 1023)
-                            throw std::runtime_error("could not sample a sequence with loss-bearing tokens");
-                    }
-                }
+                const std::size_t record = training_records[
+                    overfit_one_batch ? 0 : record_distribution(random)];
+                const std::size_t start = static_cast<std::size_t>(corpus.record_starts[record]);
+                const std::size_t length = static_cast<std::size_t>(corpus.record_lengths[record]) - 1;
                 std::vector<int> input(
                     corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start),
                     corpus.tokens.begin() + static_cast<std::ptrdiff_t>(
-                        start + config.max_sequence_length));
+                        start + length));
                 std::vector<int> target(
                     corpus.tokens.begin() + static_cast<std::ptrdiff_t>(start + 1),
                     corpus.tokens.begin() + static_cast<std::ptrdiff_t>(
-                        start + config.max_sequence_length + 1));
+                        start + length + 1));
                 std::vector<float> weights(
                     corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(start + 1),
                     corpus.loss_weights.begin() + static_cast<std::ptrdiff_t>(
-                        start + config.max_sequence_length + 1));
+                        start + length + 1));
                 auto loss = tinydl::cross_entropy(model.forward(input), target, weights);
                 loss_value += loss.value().to_vector()[0];
                 loss.backward();
+                throughput_tokens += length;
             }
             loss_value /= static_cast<float>(gradient_accumulation_steps);
             optimizer.step(1.0f / static_cast<float>(gradient_accumulation_steps));
             recent_losses.push_back(loss_value);
-            ++throughput_steps;
             recent_total += loss_value;
             if (recent_losses.size() > average_window) {
                 recent_total -= recent_losses.front();
@@ -502,8 +530,7 @@ int main(int argc, char** argv) {
             if (step == 1 || step % 10 == 0) {
                 const auto now = std::chrono::steady_clock::now();
                 const float elapsed = std::chrono::duration<float>(now - throughput_start).count();
-                const float processed_tokens = static_cast<float>(
-                    throughput_steps * gradient_accumulation_steps * config.max_sequence_length);
+                const float processed_tokens = static_cast<float>(throughput_tokens);
                 std::cout << std::setprecision(6) << "step " << global_step
                           << " loss " << loss_value
                           << " avg_loss_" << recent_losses.size() << ' '
@@ -511,13 +538,12 @@ int main(int argc, char** argv) {
                           << " lr " << current_learning_rate
                           << " tokens_per_second " << processed_tokens / elapsed << '\n';
                 throughput_start = now;
-                throughput_steps = 0;
+                throughput_tokens = 0;
             }
             if (!overfit_one_batch && (step % validation_interval == 0 || step == steps)) {
                 const auto& validation_corpus = validation_path.empty() ? corpus : external_validation;
-                const std::size_t validation_begin = validation_path.empty() ? training_end : 0;
-                const float validation_loss = evaluate(model, validation_corpus, validation_begin,
-                                                       config.max_sequence_length);
+                const float validation_loss = evaluate_records(
+                    model, validation_corpus, validation_records);
                 std::cout << "step " << global_step << " validation_loss " << validation_loss
                           << " perplexity " << std::exp(validation_loss) << '\n';
             }

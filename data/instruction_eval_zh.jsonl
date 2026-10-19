@@ -4,9 +4,9 @@
 {"id":"definition_ai","category":"definition","instruction":"什么是人工智能?","expected_keywords":["计算机","智能"]}
 {"id":"definition_ml","category":"definition","instruction":"请解释机器学习。","expected_keywords":["数据","学习"]}
 {"id":"health_basics","category":"health","instruction":"请列出三种保持身体健康的方法。","expected_keywords":["运动","饮食","睡眠"]}
-{"id":"math_arithmetic","category":"math","instruction":"计算(10+5)×2+20÷4。","expected_keywords":["35"]}
+{"id":"math_arithmetic","category":"math","instruction":"计算(10+5)×2+20÷4。","rule":{"type":"exact_number","value":35}}
 {"id":"translation_en","category":"translation","instruction":"将“我想预订明天晚上7点的餐厅”翻译成英语。","expected_keywords":["reservation","7"]}
 {"id":"summarize","category":"summarization","instruction":"用一句话概括:小明每天坚持跑步,半年后他的耐力和睡眠质量都有所改善。","expected_keywords":["跑步","改善"]}
-{"id":"format_three","category":"instruction_following","instruction":"仅列出三种常见的编程语言,使用逗号分隔。","expected_keywords":[","]}
-{"id":"insufficient_information","category":"uncertainty","instruction":"根据已知信息回答:小王买了一本书。这本书的作者是谁?","expected_keywords":["无法确定"]}
+{"id":"format_three","category":"instruction_following","instruction":"仅列出三种常见的编程语言,使用逗号分隔。","rule":{"type":"delimited_list","count":3,"separator":"[,，]"}}
+{"id":"insufficient_information","category":"uncertainty","instruction":"根据已知信息回答:小王买了一本书。这本书的作者是谁?","rule":{"type":"contains_any","values":["无法确定","不能确定","信息不足","不知道"]}}
 {"id":"rewrite","category":"rewriting","instruction":"将“这个东西真的挺好的”改写为正式书面语。","expected_keywords":["优秀"]}
