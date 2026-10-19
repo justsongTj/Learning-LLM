@@ -147,7 +147,14 @@ def generate_long_context(count: int, seed: int, excluded_prompts=None,
         "根据以下资料作答。资料开头说明{name}来自{city}，业余爱好是{activity}。{details}问题：{name}的业余爱好是什么？",
     )
     records = set()
+    attempts = 0
+    maximum_attempts = max(10_000, count * 1_000)
     while len(records) < count:
+        attempts += 1
+        if attempts > maximum_attempts:
+            raise RuntimeError(
+                f"could not generate {count} unique long-context records "
+                "within the requested token range")
         name = randomizer.choice(names)
         city = randomizer.choice(cities)
         activity = randomizer.choice(activities)
