@@ -1,0 +1,8 @@
+{"id":"math_add","category":"math","instruction":"计算137+68。","rule":{"type":"exact_number","value":205}}
+{"id":"math_subtract","category":"math","instruction":"请给出算式191-46的结果。","rule":{"type":"exact_number","value":145}}
+{"id":"math_multiply","category":"math","instruction":"计算23×21。","rule":{"type":"exact_number","value":483}}
+{"id":"uncertainty_brand","category":"uncertainty","instruction":"根据已知信息回答：小吴有一台电脑。它的品牌是什么？","rule":{"type":"contains_any","values":["无法确定","不能确定","信息不足","无法判断"]}}
+{"id":"uncertainty_price","category":"uncertainty","instruction":"根据已知信息回答：小郑有一本书。它的价格是多少？","rule":{"type":"contains_any","values":["无法确定","不能确定","信息不足","无法判断"]}}
+{"id":"format_languages","category":"format","instruction":"请只写三种编程语言，以逗号分隔。","rule":{"type":"delimited_list","count":3,"separator":"[,，]"}}
+{"id":"format_fruits","category":"format","instruction":"请只写三种水果，以逗号分隔。","rule":{"type":"delimited_list","count":3,"separator":"[,，]"}}
+{"id":"translation_en","category":"translation","instruction":"将“我喜欢在清晨散步”翻译成英语。","rule":{"type":"regex","pattern":"(?i)(I|morning|walk)"}}

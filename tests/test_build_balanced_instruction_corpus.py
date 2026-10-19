@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+SCRIPT = REPOSITORY / "scripts" / "build_balanced_instruction_corpus.py"
+
+
+class BuildBalancedInstructionCorpusTest(unittest.TestCase):
+    def test_builds_deterministic_balanced_splits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "strict.txt"
+            train = root / "train.txt"
+            validation = root / "validation.txt"
+            stats = root / "stats.json"
+            source.write_text("\n".join(
+                f"指令:将“测试句子{i}”翻译成英语。 回答:Test sentence {i}."
+                for i in range(20)) + "\n", encoding="utf-8")
+
+            subprocess.run([
+                sys.executable, str(SCRIPT), "--input", str(source),
+                "--train-output", str(train), "--validation-output", str(validation),
+                "--stats-output", str(stats), "--translation-count", "10",
+                "--math-count", "10", "--uncertainty-count", "10",
+                "--format-count", "10", "--validation-ratio", "0.5",
+            ], check=True, cwd=REPOSITORY, capture_output=True, text=True, encoding="utf-8")
+
+            report = json.loads(stats.read_text(encoding="utf-8"))
+            records = train.read_text(encoding="utf-8").splitlines() + \
+                validation.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(report["total_records"], 40)
+            self.assertEqual(set(report["category_counts"]),
+                             {"translation", "math", "uncertainty", "format"})
+            self.assertTrue(all(record.startswith("指令:") for record in records))
+            self.assertTrue(any("无法" in record or "信息不足" in record for record in records))
+
+
+if __name__ == "__main__":
+    unittest.main()
