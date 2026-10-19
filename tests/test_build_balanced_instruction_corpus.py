@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,48 @@ class BuildBalancedInstructionCorpusTest(unittest.TestCase):
             self.assertIn(len(items), (2, 3, 4))
             self.assertIn("、".join(items), prompt)
         self.assertEqual(observed_counts, {2, 3, 4})
+
+    def test_open_copy_curriculum_uses_mixed_items_and_replays_legacy(self):
+        records = MODULE.generate_format(1000, 42, curriculum="copy_count_open")
+        self.assertEqual(len(records), 1000)
+        open_records = 0
+        legacy_records = 0
+        observed_counts = set()
+        for record in records:
+            prompt, answer = MODULE.parse_instruction(record)
+            items = answer.split(",")
+            observed_counts.add(len(items))
+            self.assertIn(len(items), (2, 3, 4))
+            self.assertIn("、".join(items), prompt)
+            if all(item in MODULE.OPEN_COPY_TRAIN_ITEMS for item in items):
+                open_records += 1
+            else:
+                legacy_records += 1
+        self.assertEqual(observed_counts, {2, 3, 4})
+        self.assertGreater(open_records, 700)
+        self.assertGreater(legacy_records, 100)
+
+    def test_open_copy_ood_candidates_are_held_out_from_training_pool(self):
+        evaluation = REPOSITORY / "data" / \
+            "instruction_eval_format_copy_count_ood_v1.jsonl"
+        cases = [json.loads(line) for line in evaluation.read_text(
+            encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(cases), 30)
+        self.assertEqual({case["rule"]["type"] for case in cases}, {"exact_text"})
+        self.assertEqual({len(case["rule"]["value"].split(",")) for case in cases},
+                         {2, 3, 4})
+        training_items = set(MODULE.OPEN_COPY_TRAIN_ITEMS)
+        training_items.update(
+            item for pool in MODULE.FORMAT_POOLS.values() for item in pool)
+        for case in cases:
+            candidates = re.search(r"(?:为：|列表|排列：|清单：)(.+?)(?:。请|中按|。输出|。保留)",
+                                   case["instruction"])
+            self.assertIsNotNone(candidates)
+            candidate_items = candidates.group(1).split("、")
+            self.assertEqual(len(candidate_items), 6)
+            self.assertFalse(training_items.intersection(candidate_items))
+            self.assertEqual(case["rule"]["value"].split(","),
+                             candidate_items[:len(case["rule"]["value"].split(","))])
 
     def test_long_context_filter_refills_to_requested_count(self):
         records = MODULE.generate_long_context(

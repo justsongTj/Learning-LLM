@@ -12,6 +12,35 @@ from pathlib import Path
 from prepare_instruction_corpus import classify_task, normalize, parse_instruction, stable_bucket
 
 
+FORMAT_POOLS = {
+    "编程语言": ("Python", "C++", "Rust", "Java", "Go", "JavaScript"),
+    "水果": ("苹果", "香蕉", "橙子", "葡萄", "梨", "草莓"),
+    "颜色": ("红色", "蓝色", "绿色", "黄色", "紫色", "橙色"),
+    "运动": ("跑步", "游泳", "骑行", "篮球", "羽毛球", "足球"),
+    "乐器": ("钢琴", "吉他", "小提琴", "长笛", "架子鼓", "古筝"),
+}
+
+# Deliberately excludes every candidate used by
+# data/instruction_eval_format_copy_count_ood_v1.jsonl. Open-copy records mix
+# unrelated items so the model cannot solve the task by category or answer
+# frequency alone.
+OPEN_COPY_TRAIN_ITEMS = tuple("""
+北京 上海 广州 深圳 杭州 成都 武汉 南京 苏州 青岛 天津 重庆 长沙 郑州 合肥 福州
+熊猫 海豚 松鼠 斑马 河马 骆驼 孔雀 海鸥 蜜蜂 蝴蝶 企鹅 海豹 猎豹 狐狸 天鹅 羚羊
+米饭 面条 饺子 包子 豆腐 牛奶 面包 蛋糕 蜂蜜 花生 核桃 红枣 玉米 土豆 番茄 黄瓜
+铅笔 橡皮 尺子 剪刀 胶水 画笔 纸张 信封 台灯 书架 水杯 毛巾 雨伞 钥匙 时钟 镜子
+火车 地铁 公交 轮船 飞机 单车 卡车 出租车 缆车 渡船 摩托车 直升机 帆船 雪橇 马车 独木舟
+医生 教师 律师 厨师 记者 画家 作家 导游 司机 木匠 农民 摄影师 设计师 工程师 翻译员 研究员
+松树 竹子 荷花 梅花 兰花 菊花 柳树 枫树 桃树 银杏 玫瑰 百合 茉莉 海棠 牡丹 水仙
+山峰 河流 湖泊 海洋 沙漠 草原 森林 岛屿 峡谷 瀑布 冰川 洞穴 田野 海岸 泉水 湿地
+春风 夏雨 秋叶 冬雪 朝阳 晚霞 星光 月色 云朵 雷声 薄雾 彩虹 露珠 微风 霜花 晨光
+Alpha Beta Gamma Delta Echo Foxtrot Hotel India Kilo Lima Mike November Oscar Quebec Sierra Tango
+模块甲 模块乙 模块丙 模块丁 样本一 样本二 样本三 样本四 节点A 节点B 节点C 节点D 编号01 编号02 编号03 编号04
+毛笔 墨水 砚台 宣纸 茶壶 茶杯 棋盘 积木 口琴 风琴 木琴 铜鼓 围巾 手套 帽子 外套
+白云 青山 碧水 绿洲 石桥 古塔 庭院 长廊 书店 剧院 车站 港口 工厂 农场 校园 公园
+""".split())
+
+
 def stable_rank(text: str, seed: int) -> bytes:
     return hashlib.sha256(f"{seed}\0{text}".encode("utf-8")).digest()
 
@@ -103,24 +132,28 @@ def generate_format(count: int, seed: int, excluded_prompts=None,
                     curriculum: str = "mixed"):
     excluded_prompts = excluded_prompts or set()
     randomizer = random.Random(seed + 303)
-    pools = {
-        "编程语言": ("Python", "C++", "Rust", "Java", "Go", "JavaScript"),
-        "水果": ("苹果", "香蕉", "橙子", "葡萄", "梨", "草莓"),
-        "颜色": ("红色", "蓝色", "绿色", "黄色", "紫色", "橙色"),
-        "运动": ("跑步", "游泳", "骑行", "篮球", "羽毛球", "足球"),
-        "乐器": ("钢琴", "吉他", "小提琴", "长笛", "架子鼓", "古筝"),
-    }
+    pools = FORMAT_POOLS
     records = {}
     while len(records) < count:
         category = randomizer.choice(tuple(pools))
         candidates = randomizer.sample(pools[category], len(pools[category]))
-        if curriculum in ("copy2", "copy_count"):
+        if curriculum in ("copy2", "copy_count", "copy_count_open"):
             item_count = 2 if curriculum == "copy2" else randomizer.choice((2, 3, 4))
             chinese_count = {2: "两", 3: "三", 4: "四"}[item_count]
-            prompt = randomizer.choice((
-                f"候选{category}依次为：{'、'.join(candidates)}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
-                f"从列表{'、'.join(candidates)}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
-            ))
+            if curriculum == "copy_count_open" and randomizer.randrange(5) != 0:
+                candidates = randomizer.sample(OPEN_COPY_TRAIN_ITEMS, 6)
+                joined = "、".join(candidates)
+                prompt = randomizer.choice((
+                    f"候选项依次为：{joined}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
+                    f"从列表{joined}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
+                    f"以下项目按顺序排列：{joined}。输出前{item_count}项，各项之间使用英文逗号。",
+                    f"给定清单：{joined}。保留最前面的{chinese_count}项，只输出用英文逗号连接的结果。",
+                ))
+            else:
+                prompt = randomizer.choice((
+                    f"候选{category}依次为：{'、'.join(candidates)}。请取前{item_count}项，使用英文逗号分隔，只输出结果。",
+                    f"从列表{'、'.join(candidates)}中按原顺序选择前{chinese_count}项，用英文逗号分隔，不要解释。",
+                ))
             prompt_key = normalize(prompt)
             if prompt_key not in excluded_prompts:
                 records[prompt_key] = (
@@ -243,7 +276,8 @@ def main() -> int:
     parser.add_argument("--uncertainty-count", type=int, default=500)
     parser.add_argument("--format-count", type=int, default=500)
     parser.add_argument("--format-curriculum",
-                        choices=("mixed", "copy2", "copy_count"),
+                        choices=("mixed", "copy2", "copy_count",
+                                 "copy_count_open"),
                         default="mixed")
     parser.add_argument("--long-context-count", type=int, default=500)
     parser.add_argument("--evaluation-file", action="append",
