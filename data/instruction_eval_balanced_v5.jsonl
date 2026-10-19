@@ -14,5 +14,5 @@
 {"id":"format_sports_3","category":"format","instruction":"请写出3种运动，各项之间用英文逗号分隔，只输出列表。","rule":{"type":"delimited_list","count":3,"separator":",","allowed_items":["跑步","游泳","骑行","篮球","羽毛球","足球"]}}
 {"id":"translation_en_1","category":"translation","instruction":"将“我每天早晨步行去学校”翻译成英语。","rule":{"type":"regex","patterns":["\\bI\\b","morning","(?:walk|go)","school"]}}
 {"id":"translation_en_2","category":"translation","instruction":"把“这本书很有趣”译成英语。","rule":{"type":"regex","patterns":["book","interesting"]}}
-{"id":"long_city_1","category":"long_context","instruction":"请阅读记录并回答最后的问题。第一条关键信息：顾言居住在南京，最喜欢的活动是远足。会议室在二楼，窗边摆着三盆绿植。当天上午天气晴朗，下午有短时阵雨。记录员使用蓝色文件夹整理了全部材料。活动结束后，工作人员检查了门窗和照明。公告栏上还张贴着下周的值班安排。参与者依次签名，并在入口领取了号码牌。根据记录，顾言居住在哪座城市？","rule":{"type":"contains_any","values":["南京"]}}
-{"id":"long_hobby_1","category":"long_context","instruction":"根据以下资料作答。资料开头说明沈月来自武汉，业余爱好是书法。公告栏上还张贴着下周的值班安排。参与者依次签名，并在入口领取了号码牌。当天上午天气晴朗，下午有短时阵雨。活动结束后，工作人员检查了门窗和照明。会议室在二楼，窗边摆着三盆绿植。记录员使用蓝色文件夹整理了全部材料。问题：沈月的业余爱好是什么？","rule":{"type":"contains_any","values":["书法"]}}
+{"id":"long_city_1","category":"long_context","instruction":"请阅读记录并回答最后的问题。第一条关键信息：顾言居住在南京，最喜欢的活动是远足。会议室在二楼，窗边摆着三盆绿植。当天上午天气晴朗，下午有短时阵雨。记录员使用蓝色文件夹整理了全部材料。活动结束后，工作人员检查了门窗和照明。根据记录，顾言居住在哪座城市？","rule":{"type":"contains_any","values":["南京"]}}
+{"id":"long_hobby_1","category":"long_context","instruction":"根据以下资料作答。资料开头说明沈月来自武汉，业余爱好是书法。公告栏上还张贴着下周的值班安排。参与者依次签名，并在入口领取了号码牌。当天上午天气晴朗，下午有短时阵雨。活动结束后，工作人员检查了门窗和照明。问题：沈月的业余爱好是什么？","rule":{"type":"contains_any","values":["书法"]}}
